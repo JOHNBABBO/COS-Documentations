@@ -462,15 +462,38 @@ Cancellation is only possible while the job is in `in_queue` status. Once a job 
 
 #### `POST /jobs/mailings`
 
-Create a new mailing job as a **draft** and return an itemized cost estimate. Documents must be uploaded first via `POST /documents`. The job is **not** released for printing until you confirm it via `POST /jobs/mailings/{job_id}/submit`. For PACER-sourced jobs the PACER lookup runs now (at draft creation), so the estimate reflects the actual recipient list. A draft that is never submitted expires after 48 hours.
+Create a new mailing job as a **draft** and return an itemized cost estimate. Documents are uploaded inline as part of this request using `multipart/form-data`. The job is **not** released for printing until you confirm it via `POST /jobs/mailings/{job_id}/submit`. For PACER-sourced jobs the PACER lookup runs at draft creation, so the estimate reflects the actual recipient list. A draft that is never submitted expires after 48 hours.
 
-**Request body (JSON):**
+**Request:** `multipart/form-data`
+
+The request body is split into two parts: a JSON metadata field named `job` containing all job configuration, and one or more binary file fields containing the PDF documents.
+
+**File fields:**
+
+| Field               | Count | Description                                              |
+| ------------------- | ----- | -------------------------------------------------------- |
+| `files`             | 1–15  | Standard notice documents (PDF). Max 20 MB each.         |
+| `ballotFiles`       | 0–1   | Ballot document (PDF), if applicable. Max 20 MB.         |
+| `proofOfClaimFiles` | 0–1   | Proof of claim document (PDF), if applicable. Max 20 MB. |
+
+**Constraints:** PDF only. Max 20 MB per file, max 100 MB total across all files in a single job. At least one file in `files` is required.
+
+**`job` metadata field (JSON):**
 
 ```json
 {
   "organization_id": "org_a1b2c3",
   "type": "bankruptcy_notice",
-  "documents": ["doc_abc123", "doc_def456"],
+  "documents": [
+    {
+      "docket_description": "Motion to Sell Property",
+      "docket_reference_number": "1"
+    },
+    {
+      "docket_description": "Notice of Hearing",
+      "docket_reference_number": "2"
+    }
+  ],
   "recipients": {
     "source": "pacer"
   },
@@ -488,23 +511,29 @@ Create a new mailing job as a **draft** and return an itemized cost estimate. Do
 }
 ```
 
-**Field reference:**
+Each object in the `documents` array corresponds positionally to a file in the `files` field — `documents[0]` is the metadata for `files[0]`, `documents[1]` for `files[1]`, and so on. The same positional pairing applies to `ballots` and `proofOfClaims` with their respective file fields.
 
-| Field                          | Type   | Required                  | Notes                                                                                                                                                                                               |
-| ------------------------------ | ------ | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `organization_id`              | string | ✓                         | Owning org                                                                                                                                                                                          |
-| `type`                         | string | ✓                         | See job types below                                                                                                                                                                                 |
-| `documents`                    | array  | ✓                         | 1–15 `document_id` strings. **Array order is respected** — documents print in the order listed. Document role (`standard`, `ballot`, `proof_of_claim`) is set at upload time via `POST /documents`. |
-| `recipients.source`            | string | ✓                         | `"pacer"` or `"user_supplied"`                                                                                                                                                                      |
-| `recipients.addresses`         | array  | if source=user_supplied   | See recipient object below                                                                                                                                                                          |
-| `order_preferences.sides`      | string |                           | `"double_sided"` (default) or `"one_sided"`                                                                                                                                                         |
-| `order_preferences.format`     | string |                           | `"2up"` (default) or `"1up"`. `4up` is not yet supported.                                                                                                                                           |
-| `order_preferences.service`    | string |                           | `"normal"` (default) or `"rush"`                                                                                                                                                                    |
-| `order_preferences.mail_class` | string |                           | `"first_class"` (default), `"certified"`, or `"priority_express"`. Overrides org default. **`certified` and `priority_express` are only settable at the org settings or job level.**                |
-| `return_address`               | object |                           | Overrides org default. Same shape as `return_address` in settings.                                                                                                                                  |
-| `signature`                    | object |                           | Overrides org default. See signature object below.                                                                                                                                                  |
-| `external_reference`           | string |                           | Your reference ID; stored for your records                                                                                                                                                          |
-| `bankruptcy_options`           | object | if type=bankruptcy_notice | See bankruptcy options object below                                                                                                                                                                 |
+**`job` field reference:**
+
+| Field                                 | Type   | Required                  | Notes                                                                                                                                                                            |
+| ------------------------------------- | ------ | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `organization_id`                     | string | ✓                         | Owning org                                                                                                                                                                       |
+| `type`                                | string | ✓                         | See job types below                                                                                                                                                              |
+| `documents`                           | array  | ✓                         | 1–15 document metadata objects. Array order is respected — documents print in the order listed. Each object maps positionally to a file in the `files` field.                    |
+| `documents[].docket_description`      | string |                           | Appears on the certificate of service for this document. Max 85 characters.                                                                                                      |
+| `documents[].docket_reference_number` | string |                           | Optional reference number for this document. Max 4 characters.                                                                                                                   |
+| `ballots`                             | array  |                           | Up to 1 ballot document metadata object. Maps positionally to `ballotFiles`.                                                                                                     |
+| `proofOfClaims`                       | array  |                           | Up to 1 proof of claim metadata object. Maps positionally to `proofOfClaimFiles`.                                                                                                |
+| `recipients.source`                   | string | ✓                         | `"pacer"` or `"user_supplied"`                                                                                                                                                   |
+| `recipients.addresses`                | array  | if source=user_supplied   | See recipient object below                                                                                                                                                       |
+| `order_preferences.sides`             | string |                           | `"double_sided"` (default) or `"one_sided"`                                                                                                                                      |
+| `order_preferences.format`            | string |                           | `"2up"` (default) or `"1up"`. `4up` is not yet supported.                                                                                                                        |
+| `order_preferences.service`           | string |                           | `"normal"` (default) or `"rush"`                                                                                                                                                 |
+| `order_preferences.mail_class`        | string |                           | `"first_class"` (default), `"certified"`, or `"priority_express"`. Overrides org default. `certified` and `priority_express` are only settable at the org settings or job level. |
+| `return_address`                      | object |                           | Overrides org default. Same shape as `return_address` in settings.                                                                                                               |
+| `signature`                           | object |                           | Overrides org default. See signature object below.                                                                                                                               |
+| `external_reference`                  | string |                           | Your reference ID; stored for your records                                                                                                                                       |
+| `bankruptcy_options`                  | object | if type=bankruptcy_notice | See bankruptcy options object below                                                                                                                                              |
 
 **Job types (`type`):**
 
@@ -738,63 +767,6 @@ Cancel a job. Only valid while the job is in `in_queue` status.
 
 ---
 
-### Documents
-
-Documents must be uploaded before a job is submitted. Upload returns a `document_id` you include in `POST /jobs/mailings`.
-
----
-
-#### `POST /documents`
-
-Upload a document. Multipart form upload.
-
-**Request:** `multipart/form-data`
-
-| Field                     | Type   | Description                                                                 |
-| ------------------------- | ------ | --------------------------------------------------------------------------- |
-| `file`                    | binary | PDF file. Max 20 MB per file.                                               |
-| `organization_id`         | string | Owning org                                                                  |
-| `role`                    | string | `standard` (default) \| `ballot` \| `proof_of_claim`                        |
-| `docket_description`      | string | Appears on the certificate of service for this document. Max 85 characters. |
-| `docket_reference_number` | string | Optional document reference number. Max 4 characters.                       |
-
-**Constraints:** PDF only. Max 20 MB per file, max 100 MB total across all documents in a single job.
-
-**Response `201 Created`:**
-
-```json
-{
-  "document_id": "doc_abc123",
-  "filename": "motion-to-sell.pdf",
-  "page_count": 12,
-  "organization_id": "org_a1b2c3",
-  "created_at": "2026-05-26T17:50:00Z"
-}
-```
-
----
-
-#### `GET /documents/{document_id}`
-
-Get document metadata.
-
-**Response `200 OK`:**
-
-```json
-{
-  "document_id": "doc_abc123",
-  "filename": "motion-to-sell.pdf",
-  "page_count": 12,
-  "role": "standard",
-  "organization_id": "org_a1b2c3",
-  "docket_description": "Motion to Sell Property",
-  "docket_reference_number": null,
-  "created_at": "2026-05-26T17:50:00Z"
-}
-```
-
----
-
 ### Certificates
 
 The certificate of service PDF is generated when the job completes. It is stored for **90 days** from the mail date.
@@ -886,6 +858,18 @@ All errors return a consistent envelope:
 ## Changelog
 
 ### 2026-07-08
+
+**Jobs — `POST /jobs/mailings` (document upload model)**
+
+- Changed request format from `application/json` to `multipart/form-data`. Documents are now uploaded inline as part of the job creation request rather than in a separate pre-upload step.
+- The `documents` field in the `job` metadata no longer accepts an array of `document_id` strings. It now accepts an array of metadata objects (one per file), each containing optional `docket_description` and `docket_reference_number`. Each metadata object corresponds positionally to a file in the `files` multipart field.
+- Added `ballotFiles` and `proofOfClaimFiles` as separate multipart file fields for ballot and proof of claim documents. Their metadata is provided via `ballots` and `proofOfClaims` arrays in the `job` field respectively.
+- File constraints remain unchanged: PDF only, max 20 MB per file, max 100 MB total per job.
+
+**Documents section — removed**
+
+- `POST /documents` (standalone document pre-upload) has been removed from v1. Documents are submitted inline with `POST /jobs/mailings`.
+- `GET /documents/{document_id}` has been removed from v1.
 
 **Organizations — `POST /organizations`**
 
