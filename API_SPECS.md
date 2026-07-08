@@ -12,7 +12,7 @@ The CoS Partner API allows integration partners to submit physical mailing jobs,
 
 Billing is optional and configured per your business agreement with CoS. Organizations are set up for either direct Stripe payment (card or ACH) or monthly invoicing — this is determined during onboarding and is transparent to the API. When billing is enabled via Stripe, a valid payment method must be on file before jobs can be submitted.
 
-**`[CHANGED 2026-06-25]` Onboarding gate.** For partners whose customers pay CoS directly, an organization must clear a two-condition **onboarding gate** before it can submit jobs: **(1) a valid payment method is on file** *and* **(2) the customer has accepted the current CoS Terms of Service.** Either condition can be checked independently (see `GET /organizations/{id}/billing/status` and `GET /organizations/{id}/terms/status`). For partners not configured to require direct payment or terms (the default), both conditions are treated as satisfied automatically and customers are never prompted.
+**Onboarding gate.** For partners whose customers pay CoS directly, an organization must clear a two-condition **onboarding gate** before it can submit jobs: **(1) a valid payment method is on file** _and_ **(2) the customer has accepted the current CoS Terms of Service.** Either condition can be checked independently (see `GET /organizations/{id}/billing/status` and `GET /organizations/{id}/terms/status`). For partners not configured to require direct payment or terms (the default), both conditions are treated as satisfied automatically and customers are never prompted.
 
 **Base URL:** `https://api.certificateofservice.com/v1/cos`
 
@@ -33,14 +33,14 @@ Authorization: Bearer <api-key>
 
 ## Partner configuration (set by CoS)
 
-> **`[CHANGED 2026-06-25]`** A small number of settings are configured by CoS per your business agreement during onboarding. **You cannot change these via the API** — they're documented here only so you understand how your integration will behave. They apply to every organization you provision.
+> A small number of settings are configured by CoS per your business agreement during onboarding. **You cannot change these via the API** — they're documented here only so you understand how your integration will behave. They apply to every organization you provision.
 
-| Setting | Values | What it changes for you |
-| --- | --- | --- |
-| **Billing mode** | `stripe` \| `monthly_invoice` | `stripe`: your customers pay CoS directly; `billing/setup` and `billing/status` are active and a valid payment method is required before jobs can be submitted. `monthly_invoice`: CoS invoices in arrears; the `billing/*` endpoints return `403` and no payment method is required. |
-| **Terms required** | `true` \| `false` | When `true`, each customer must accept the CoS Terms of Service before jobs can be submitted (observable via `GET /organizations/{id}/terms/status`). When `false`, terms are treated as accepted automatically and customers are never prompted. |
+| Setting            | Values                        | What it changes for you                                                                                                                                                                                                                                                               |
+| ------------------ | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Billing mode**   | `stripe` \| `monthly_invoice` | `stripe`: your customers pay CoS directly; `billing/setup` and `billing/status` are active and a valid payment method is required before jobs can be submitted. `monthly_invoice`: CoS invoices in arrears; the `billing/*` endpoints return `403` and no payment method is required. |
+| **Terms required** | `true` \| `false`             | When `true`, each customer must accept the CoS Terms of Service before jobs can be submitted (observable via `GET /organizations/{id}/terms/status`). When `false`, terms are treated as accepted automatically and customers are never prompted.                                     |
 
-A “payment method required” gate is **not** a separate setting — it is implied by billing mode (`stripe` always requires one; `monthly_invoice` never does). The onboarding gate for an organization is therefore: *(payment method on file, if billing mode is `stripe`)* **and** *(terms accepted, if terms required)*.
+A “payment method required” gate is **not** a separate setting — it is implied by billing mode (`stripe` always requires one; `monthly_invoice` never does). The onboarding gate for an organization is therefore: _(payment method on file, if billing mode is `stripe`)_ **and** _(terms accepted, if terms required)_.
 
 ---
 
@@ -67,7 +67,7 @@ Organization (a firm or trustee account in your platform)
 
 An **organization** represents a firm or customer account within your platform. Partners can provision organizations programmatically.
 
-**`[CHANGED 2026-06-25]` Tenancy.** Every organization endpoint is scoped to the authenticating partner's API key. A partner can only read, update, or list organizations it created; requesting an `organization_id` that belongs to another partner returns `404 not_found`. Organizations are managed entirely under the partner key — there are no per-organization logins or passwords.
+**Tenancy.** Every organization endpoint is scoped to the authenticating partner's API key. A partner can only read, update, or list organizations it created; requesting an `organization_id` that belongs to another partner returns `404 not_found`. Organizations are managed entirely under the partner key — there are no per-organization logins or passwords.
 
 ---
 
@@ -96,18 +96,18 @@ Provision a new organization.
 }
 ```
 
-| Field | Type | Required | Notes |
-|---|---|---|---|
-| `name` | string | ✓ | Firm or organization name |
-| `external_id` | string | | Your internal ID for this org — stored for cross-reference |
-| `contact_email` | string | ✓ | Primary contact email |
-| `company_phone_number` | string | ✓ | Must be unique |
-| `address.line1` | string | ✓ | |
-| `address.line2` | string | | |
-| `address.city` | string | ✓ | |
-| `address.state` | string | ✓ | US state code |
-| `address.zip_code` | string | ✓ | |
-| `address.country` | string | ✓ | Must be `"US"` in v1 |
+| Field                  | Type   | Required | Notes                                                      |
+| ---------------------- | ------ | -------- | ---------------------------------------------------------- |
+| `name`                 | string | ✓        | Firm or organization name                                  |
+| `external_id`          | string |          | Your internal ID for this org — stored for cross-reference |
+| `contact_email`        | string | ✓        | Primary contact email                                      |
+| `company_phone_number` | string | ✓        | Must be unique                                             |
+| `address.line1`        | string | ✓        |                                                            |
+| `address.line2`        | string |          |                                                            |
+| `address.city`         | string | ✓        |                                                            |
+| `address.state`        | string | ✓        | US state code                                              |
+| `address.zip_code`     | string | ✓        |                                                            |
+| `address.country`      | string | ✓        | Must be `"US"` in v1                                       |
 
 **Response `201 Created`:**
 
@@ -134,29 +134,31 @@ Provision a new organization.
 
 #### `GET /organizations/{organization_id}`
 
-Retrieve an organization by ID. **`[CHANGED 2026-06-25]`** Scoped to the authenticating partner — returns `404 not_found` if the org belongs to another partner.
+Retrieve an organization by ID. Scoped to the authenticating partner — returns `404 not_found` if the org belongs to another partner.
 
 **Response `200 OK`:** same shape as `POST /organizations` response.
 
 ---
 
-#### `[CHANGED 2026-06-25]` `GET /organizations`
+#### `GET /organizations`
 
 List organizations belonging to the authenticating partner. **Results are always filtered to the partner's own organizations (scoped by API key)** — a partner can never see another partner's organizations. Use the `external_id` filter to recover the CoS `organization_id` for an org you created (e.g. if you didn't persist it from the `POST` response).
 
 **Query parameters:**
 
-| Param | Type | Description |
-|---|---|---|
-| `external_id` | string | Return the org matching your own ID for it |
-| `page` | integer | Default 1 |
-| `per_page` | integer | Default 25, max 100 |
+| Param         | Type    | Description                                |
+| ------------- | ------- | ------------------------------------------ |
+| `external_id` | string  | Return the org matching your own ID for it |
+| `page`        | integer | Default 1                                  |
+| `per_page`    | integer | Default 25, max 100                        |
 
 **Response `200 OK`:**
 
 ```json
 {
-  "organizations": [ /* array of organization objects, same shape as GET /organizations/{id} */ ],
+  "organizations": [
+    /* array of organization objects, same shape as GET /organizations/{id} */
+  ],
   "pagination": {
     "page": 1,
     "per_page": 25,
@@ -171,7 +173,7 @@ Returns an empty `organizations` array (not `404`) when no org matches the filte
 
 #### `PATCH /organizations/{organization_id}`
 
-Update organization details (name, contact info, external ID, address). **`[CHANGED 2026-06-25]`** Scoped to the authenticating partner; `404 not_found` for another partner's org.
+Update organization details (name, contact info, external ID, address). Scoped to the authenticating partner; `404 not_found` for another partner's org.
 
 **Request body:** any subset of the `POST /organizations` fields.
 
@@ -224,44 +226,44 @@ Firm-level defaults applied to every job submitted by that organization unless o
 
 At least one of `address_name` or `firm_name` is required.
 
-| Field | Type | Required | Notes |
-|---|---|---|---|
-| `address_name` | string | one of | Individual name, e.g. `"Nancy Hoffman, Trustee"` |
-| `firm_name` | string | one of | Firm name |
-| `line1` | string | ✓ | |
-| `line2` | string | | |
-| `city` | string | ✓ | |
-| `state` | string | ✓ | US state code |
-| `zip_code` | string | ✓ | |
-| `country` | string | ✓ | Must be `"US"` in v1 |
+| Field          | Type   | Required | Notes                                            |
+| -------------- | ------ | -------- | ------------------------------------------------ |
+| `address_name` | string | one of   | Individual name, e.g. `"Nancy Hoffman, Trustee"` |
+| `firm_name`    | string | one of   | Firm name                                        |
+| `line1`        | string | ✓        |                                                  |
+| `line2`        | string |          |                                                  |
+| `city`         | string | ✓        |                                                  |
+| `state`        | string | ✓        | US state code                                    |
+| `zip_code`     | string | ✓        |                                                  |
+| `country`      | string | ✓        | Must be `"US"` in v1                             |
 
 **`order_preferences` field reference:**
 
-| Field | Type | Values | Notes |
-|---|---|---|---|
-| `sides` | string | `"double_sided"` \| `"one_sided"` | Default: `"double_sided"` |
-| `format` | string | `"2up"` \| `"1up"` ~~\| `"4up"`~~ | Default: `"2up"`. **`[CHANGED 2026-06-25]` `4up` NOT yet supported by the backend** (print pipeline implements only `1up`/`2up`). Pending eng decision — see handoff doc. |
-| `service` | string | `"normal"` \| `"rush"` | Default: `"normal"` |
+| Field        | Type   | Values                                                   | Notes                                                                                                                                  |
+| ------------ | ------ | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `sides`      | string | `"double_sided"` \| `"one_sided"`                        | Default: `"double_sided"`                                                                                                              |
+| `format`     | string | `"2up"` \| `"1up"` ~~\| `"4up"`~~                        | Default: `"2up"`. `4up` is not yet supported by the backend (print pipeline implements only `1up`/`2up`).                              |
+| `service`    | string | `"normal"` \| `"rush"`                                   | Default: `"normal"`                                                                                                                    |
 | `mail_class` | string | `"first_class"` \| `"certified"` \| `"priority_express"` | Default: `"first_class"`. **`certified` and `priority_express` can only be set at the org settings or job level** — not per-recipient. |
 
 **`signature` field reference:**
 
 `full_name`, `bar_number`, and `client_role` are required. Address fields are optional — when omitted, the org's `return_address` is used on the signature block.
 
-| Field | Type | Required | Notes |
-|---|---|---|---|
-| `full_name` | string | ✓ | Name of the signatory |
-| `bar_number` | string | ✓ | |
-| `client_role` | string | ✓ | e.g. `"Chapter 13 Trustee"`, `"Attorney for Debtor"` |
-| `firm_name` | string | | |
-| `address_line1` | string | | |
-| `address_line2` | string | | |
-| `city` | string | | |
-| `state` | string | | US state code |
-| `zip_code` | string | | |
-| `phone` | string | | |
-| `email` | string | | |
-| `fax` | string | | |
+| Field           | Type   | Required | Notes                                                |
+| --------------- | ------ | -------- | ---------------------------------------------------- |
+| `full_name`     | string | ✓        | Name of the signatory                                |
+| `bar_number`    | string | ✓        |                                                      |
+| `client_role`   | string | ✓        | e.g. `"Chapter 13 Trustee"`, `"Attorney for Debtor"` |
+| `firm_name`     | string |          |                                                      |
+| `address_line1` | string |          |                                                      |
+| `address_line2` | string |          |                                                      |
+| `city`          | string |          |                                                      |
+| `state`         | string |          | US state code                                        |
+| `zip_code`      | string |          |                                                      |
+| `phone`         | string |          |                                                      |
+| `email`         | string |          |                                                      |
+| `fax`           | string |          |                                                      |
 
 ---
 
@@ -323,10 +325,10 @@ If a payment method is already on file, it will be replaced when the customer co
 }
 ```
 
-| Field | Type | Required | Notes |
-|---|---|---|---|
-| `success_url` | string | ✓ | Redirects here after successful setup |
-| `cancel_url` | string | ✓ | Redirects here if the customer abandons setup |
+| Field         | Type   | Required | Notes                                         |
+| ------------- | ------ | -------- | --------------------------------------------- |
+| `success_url` | string | ✓        | Redirects here after successful setup         |
+| `cancel_url`  | string | ✓        | Redirects here if the customer abandons setup |
 
 **Response `200 OK`:**
 
@@ -357,19 +359,19 @@ Check whether a valid payment method is on file. Only applicable to organization
   },
   "payment_standing": "ok",
   "orders_blocked": false,
-  "outstanding_balance": { "amount": 0.00, "currency": "USD" }
+  "outstanding_balance": { "amount": 0.0, "currency": "USD" }
 }
 ```
 
 If no payment method is configured, `payment_configured` will be `false` and `payment_method` will be `null`.
 
-**`[CHANGED 2026-06-25]` Declined-payment semantics.** Per partner request, an organization with an unresolved declined payment must be prevented from submitting new jobs until it clears the outstanding balance **and** supplies a new acceptable payment method. The platform already tracks this state internally (job status `completed_payment_declined`, `order.payment_failed_at`, and admin notifications), so the partner API surfaces it here rather than introducing a separate endpoint:
+**Declined-payment semantics.** An organization with an unresolved declined payment is prevented from submitting new jobs until it clears the outstanding balance **and** supplies a new acceptable payment method. The platform tracks this state internally (job status `completed_payment_declined`, `order.payment_failed_at`, and admin notifications), so the partner API surfaces it here rather than introducing a separate endpoint:
 
-| Field | Type | Notes |
-|---|---|---|
-| `payment_standing` | string | `"ok"` \| `"declined"` \| `"past_due"`. Reflects whether the org has an unresolved failed payment. |
-| `orders_blocked` | boolean | `true` when submitting a job (`POST /jobs/mailings/{id}/submit`) will be rejected for payment reasons. Driven by `payment_standing` and `payment_configured`. |
-| `outstanding_balance` | object | Amount that must be cleared before `orders_blocked` returns to `false`. `{ amount, currency }`. |
+| Field                 | Type    | Notes                                                                                                                                                         |
+| --------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `payment_standing`    | string  | `"ok"` \| `"declined"` \| `"past_due"`. Reflects whether the org has an unresolved failed payment.                                                            |
+| `orders_blocked`      | boolean | `true` when submitting a job (`POST /jobs/mailings/{id}/submit`) will be rejected for payment reasons. Driven by `payment_standing` and `payment_configured`. |
+| `outstanding_balance` | object  | Amount that must be cleared before `orders_blocked` returns to `false`. `{ amount, currency }`.                                                               |
 
 When `orders_blocked` is `true`, `POST /jobs/mailings/{id}/submit` returns `402 payment_required` (a `draft` can still be created and estimated). To recover, the partner directs the customer back through `POST /organizations/{id}/billing/setup` (re-auth flow) and settles the outstanding balance; the block lifts automatically once both are resolved.
 
@@ -377,7 +379,7 @@ When `orders_blocked` is `true`, `POST /jobs/mailings/{id}/submit` returns `402 
 
 ### Terms of Service
 
-> **`[CHANGED 2026-06-25]` New section.** Added per partner request: customers must formally accept the CoS Terms of Service before any mailing is sent. **Display is partner-managed** — the partner renders the ToS text (returned by `GET .../terms/status`) and the acceptance UX (checkbox, submit) inside their own product, then records the acceptance via the API. CoS does not host a redirect page for this. For partners not configured to require terms, `terms_required` is `false` and `terms_accepted` is always `true`.
+> Customers must formally accept the CoS Terms of Service before any mailing is sent. **Display is partner-managed** — the partner renders the ToS text (returned by `GET .../terms/status`) and the acceptance UX (checkbox, submit) inside their own product, then records the acceptance via the API. CoS does not host a redirect page for this. For partners not configured to require terms, `terms_required` is `false` and `terms_accepted` is always `true`.
 
 ---
 
@@ -399,14 +401,14 @@ Check whether the organization has accepted the current Terms of Service. Mirror
 }
 ```
 
-| Field | Type | Notes |
-|---|---|---|
-| `terms_required` | boolean | `false` for partners not configured to require ToS — in which case `terms_accepted` is always `true`. |
-| `terms_accepted` | boolean | `true` only when `accepted_version` matches `current_version`. |
-| `current_version` | string | Identifier of the ToS version currently in force. |
-| `accepted_version` | string \| null | Version the org last accepted, if any. |
-| `accepted_at` | string \| null | ISO 8601 timestamp of acceptance. |
-| `terms_url` | string | Canonical URL of the ToS text for the partner to display. |
+| Field              | Type           | Notes                                                                                                 |
+| ------------------ | -------------- | ----------------------------------------------------------------------------------------------------- |
+| `terms_required`   | boolean        | `false` for partners not configured to require ToS — in which case `terms_accepted` is always `true`. |
+| `terms_accepted`   | boolean        | `true` only when `accepted_version` matches `current_version`.                                        |
+| `current_version`  | string         | Identifier of the ToS version currently in force.                                                     |
+| `accepted_version` | string \| null | Version the org last accepted, if any.                                                                |
+| `accepted_at`      | string \| null | ISO 8601 timestamp of acceptance.                                                                     |
+| `terms_url`        | string         | Canonical URL of the ToS text for the partner to display.                                             |
 
 A new acceptance is required whenever `current_version` advances beyond `accepted_version`.
 
@@ -426,11 +428,11 @@ Record that the organization has accepted the current Terms of Service. The part
 }
 ```
 
-| Field | Type | Required | Notes |
-|---|---|---|---|
-| `accepted_version` | string | ✓ | Must equal the `current_version` returned by `GET .../terms/status`. A stale version returns `409 conflict`. |
-| `accepted_by` | string | ✓ | Identifier (email/name) of the person who accepted, stored for audit. |
-| `accepted_at` | string |  | ISO 8601 timestamp; defaults to receipt time if omitted. |
+| Field              | Type   | Required | Notes                                                                                                        |
+| ------------------ | ------ | -------- | ------------------------------------------------------------------------------------------------------------ |
+| `accepted_version` | string | ✓        | Must equal the `current_version` returned by `GET .../terms/status`. A stale version returns `409 conflict`. |
+| `accepted_by`      | string | ✓        | Identifier (email/name) of the person who accepted, stored for audit.                                        |
+| `accepted_at`      | string |          | ISO 8601 timestamp; defaults to receipt time if omitted.                                                     |
 
 **Response `200 OK`:** same shape as `GET .../terms/status` with `terms_accepted: true`.
 
@@ -444,7 +446,7 @@ All mailing jobs live under `/jobs/mailings`. This path is structured to allow o
 
 #### `POST /jobs/mailings`
 
-**`[CHANGED 2026-06-25]`** Create a new mailing job as a **draft** and return an itemized cost estimate. Documents must be uploaded first via `POST /documents`. The job is **not** released for printing until you confirm it via `POST /jobs/mailings/{job_id}/submit`. For PACER-sourced jobs the PACER lookup runs now (at draft creation), so the estimate reflects the actual recipient list. A draft that is never submitted expires after 48 hours.
+Create a new mailing job as a **draft** and return an itemized cost estimate. Documents must be uploaded first via `POST /documents`. The job is **not** released for printing until you confirm it via `POST /jobs/mailings/{job_id}/submit`. For PACER-sourced jobs the PACER lookup runs now (at draft creation), so the estimate reflects the actual recipient list. A draft that is never submitted expires after 48 hours.
 
 **Request body (JSON):**
 
@@ -472,29 +474,29 @@ All mailing jobs live under `/jobs/mailings`. This path is structured to allow o
 
 **Field reference:**
 
-| Field | Type | Required | Notes |
-|---|---|---|---|
-| `organization_id` | string | ✓ | Owning org |
-| `type` | string | ✓ | See job types below |
-| `documents` | array | ✓ | 1–15 `document_id` strings. **Array order is respected** — documents print in the order listed. Document role (`standard`, `ballot`, `proof_of_claim`) is set at upload time via `POST /documents`. |
-| `recipients.source` | string | ✓ | `"pacer"` or `"user_supplied"` |
-| `recipients.addresses` | array | if source=user_supplied | See recipient object below |
-| `order_preferences.sides` | string | | `"double_sided"` (default) or `"one_sided"` |
-| `order_preferences.format` | string | | `"2up"` (default) or `"1up"`. **`[CHANGED 2026-06-25]` `4up` not yet supported — see handoff doc.** |
-| `order_preferences.service` | string | | `"normal"` (default) or `"rush"` |
-| `order_preferences.mail_class` | string | | `"first_class"` (default), `"certified"`, or `"priority_express"`. Overrides org default. **`certified` and `priority_express` are only settable at the org settings or job level.** |
-| `return_address` | object | | Overrides org default. Same shape as `return_address` in settings. |
-| `signature` | object | | Overrides org default. See signature object below. |
-| `external_reference` | string | | Your reference ID; stored for your records |
-| `bankruptcy_options` | object | if type=bankruptcy_notice | See bankruptcy options object below |
+| Field                          | Type   | Required                  | Notes                                                                                                                                                                                               |
+| ------------------------------ | ------ | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `organization_id`              | string | ✓                         | Owning org                                                                                                                                                                                          |
+| `type`                         | string | ✓                         | See job types below                                                                                                                                                                                 |
+| `documents`                    | array  | ✓                         | 1–15 `document_id` strings. **Array order is respected** — documents print in the order listed. Document role (`standard`, `ballot`, `proof_of_claim`) is set at upload time via `POST /documents`. |
+| `recipients.source`            | string | ✓                         | `"pacer"` or `"user_supplied"`                                                                                                                                                                      |
+| `recipients.addresses`         | array  | if source=user_supplied   | See recipient object below                                                                                                                                                                          |
+| `order_preferences.sides`      | string |                           | `"double_sided"` (default) or `"one_sided"`                                                                                                                                                         |
+| `order_preferences.format`     | string |                           | `"2up"` (default) or `"1up"`. `4up` is not yet supported.                                                                                                                                           |
+| `order_preferences.service`    | string |                           | `"normal"` (default) or `"rush"`                                                                                                                                                                    |
+| `order_preferences.mail_class` | string |                           | `"first_class"` (default), `"certified"`, or `"priority_express"`. Overrides org default. **`certified` and `priority_express` are only settable at the org settings or job level.**                |
+| `return_address`               | object |                           | Overrides org default. Same shape as `return_address` in settings.                                                                                                                                  |
+| `signature`                    | object |                           | Overrides org default. See signature object below.                                                                                                                                                  |
+| `external_reference`           | string |                           | Your reference ID; stored for your records                                                                                                                                                          |
+| `bankruptcy_options`           | object | if type=bankruptcy_notice | See bankruptcy options object below                                                                                                                                                                 |
 
 **Job types (`type`):**
 
-| Value | Description | v1 Scope |
-|---|---|---|
-| `bankruptcy_notice` | Standard BN notice | ✓ Tier 1 |
-| `legal` | General legal mailing | Tier 2 (future) |
-| `direct_mailing` | Direct mail campaign | Tier 3 (future) |
+| Value               | Description           | v1 Scope        |
+| ------------------- | --------------------- | --------------- |
+| `bankruptcy_notice` | Standard BN notice    | ✓ Tier 1        |
+| `legal`             | General legal mailing | Tier 2 (future) |
+| `direct_mailing`    | Direct mail campaign  | Tier 3 (future) |
 
 Use `"pacer"` to pull the recipient list from PACER using the submitted court and case number. Use `"user_supplied"` to supply addresses directly.
 
@@ -518,68 +520,68 @@ If PACER is unavailable or the case cannot be found, the job submission will ret
 
 Required when `type` is `"bankruptcy_notice"`. Debtor name, joint debtor name, and case chapter are pulled automatically from PACER and do not need to be supplied.
 
-| Field | Type | Required | Notes |
-|---|---|---|---|
-| `case_numbers` | array | ✓ | One or more case number strings |
-| `court_location` | object | ✓ | `state`, `district`, optional `division` |
-| `adversary_proceeding` | object | | All-or-nothing: omit entirely or supply all fields (see below) |
-| `return_envelope` | object | | See return envelope object below |
-| `certificate_preferences` | object | | See certificate preferences object below |
+| Field                     | Type   | Required | Notes                                                          |
+| ------------------------- | ------ | -------- | -------------------------------------------------------------- |
+| `case_numbers`            | array  | ✓        | One or more case number strings                                |
+| `court_location`          | object | ✓        | `state`, `district`, optional `division`                       |
+| `adversary_proceeding`    | object |          | All-or-nothing: omit entirely or supply all fields (see below) |
+| `return_envelope`         | object |          | See return envelope object below                               |
+| `certificate_preferences` | object |          | See certificate preferences object below                       |
 
 **Adversary proceeding object (`bankruptcy_options.adversary_proceeding`):**
 
 All fields are required if the object is present. Omit the entire object if there is no adversary proceeding.
 
-| Field | Type | Required | Notes |
-|---|---|---|---|
-| `adversary_number` | string | ✓ | |
-| `adversary_plaintiff` | string | ✓ | Max 40 characters |
-| `adversary_defendant` | string | ✓ | Max 40 characters |
+| Field                 | Type   | Required | Notes             |
+| --------------------- | ------ | -------- | ----------------- |
+| `adversary_number`    | string | ✓        |                   |
+| `adversary_plaintiff` | string | ✓        | Max 40 characters |
+| `adversary_defendant` | string | ✓        | Max 40 characters |
 
 **Return envelope object (`bankruptcy_options.return_envelope`):**
 
-| Field | Type | Required | Notes |
-|---|---|---|---|
-| `name` | string | ✓ | Max 144 characters |
-| `office` | string | | Max 144 characters |
-| `address` | string | ✓ | Max 144 characters |
-| `city` | string | ✓ | Max 144 characters |
-| `state` | string | ✓ | US state code |
-| `zip_code` | string | ✓ | |
-| `is_postage_included` | boolean | ✓ | |
+| Field                 | Type    | Required | Notes              |
+| --------------------- | ------- | -------- | ------------------ |
+| `name`                | string  | ✓        | Max 144 characters |
+| `office`              | string  |          | Max 144 characters |
+| `address`             | string  | ✓        | Max 144 characters |
+| `city`                | string  | ✓        | Max 144 characters |
+| `state`               | string  | ✓        | US state code      |
+| `zip_code`            | string  | ✓        |                    |
+| `is_postage_included` | boolean | ✓        |                    |
 
 **Certificate preferences object (`bankruptcy_options.certificate_preferences`):**
 
-| Field | Type | Notes |
-|---|---|---|
-| `should_attach_docs` | boolean | Whether to attach submitted documents to the certificate PDF |
-| `custom_file_name` | string | Override the default certificate filename |
-| `should_include_nef` | boolean | Whether to include the NEF on the certificate |
-| `hearing_information.hearing_date` | string | |
-| `hearing_information.hearing_time` | string | |
-| `hearing_information.hearing_location` | string | |
-| `hearing_information.response_date` | string | |
+| Field                                  | Type    | Notes                                                        |
+| -------------------------------------- | ------- | ------------------------------------------------------------ |
+| `should_attach_docs`                   | boolean | Whether to attach submitted documents to the certificate PDF |
+| `custom_file_name`                     | string  | Override the default certificate filename                    |
+| `should_include_nef`                   | boolean | Whether to include the NEF on the certificate                |
+| `hearing_information.hearing_date`     | string  |                                                              |
+| `hearing_information.hearing_time`     | string  |                                                              |
+| `hearing_information.hearing_location` | string  |                                                              |
+| `hearing_information.response_date`    | string  |                                                              |
 
 **Signature object (`signature`):**
 
 Overrides the org-level signature default for this job. `full_name`, `bar_number`, and `client_role` are required if the object is present. Address fields are optional — when omitted, they default to the org's `return_address`.
 
-| Field | Type | Required | Notes |
-|---|---|---|---|
-| `full_name` | string | ✓ | Name of the signatory |
-| `bar_number` | string | ✓ | |
-| `client_role` | string | ✓ | e.g. `"Chapter 13 Trustee"`, `"Attorney for Debtor"` |
-| `firm_name` | string | | |
-| `address_line1` | string | | |
-| `address_line2` | string | | |
-| `city` | string | | |
-| `state` | string | | US state code |
-| `zip_code` | string | | |
-| `phone` | string | | |
-| `email` | string | | |
-| `fax` | string | | |
+| Field           | Type   | Required | Notes                                                |
+| --------------- | ------ | -------- | ---------------------------------------------------- |
+| `full_name`     | string | ✓        | Name of the signatory                                |
+| `bar_number`    | string | ✓        |                                                      |
+| `client_role`   | string | ✓        | e.g. `"Chapter 13 Trustee"`, `"Attorney for Debtor"` |
+| `firm_name`     | string |          |                                                      |
+| `address_line1` | string |          |                                                      |
+| `address_line2` | string |          |                                                      |
+| `city`          | string |          |                                                      |
+| `state`         | string |          | US state code                                        |
+| `zip_code`      | string |          |                                                      |
+| `phone`         | string |          |                                                      |
+| `email`         | string |          |                                                      |
+| `fax`           | string |          |                                                      |
 
-**Response `201 Created`:** **`[CHANGED 2026-06-25]`** the job is created in `draft` status with an itemized `cost_estimate`. Review it, then confirm with `POST /jobs/mailings/{job_id}/submit`.
+**Response `201 Created`:** The job is created in `draft` status with an itemized `cost_estimate`. Review it, then confirm with `POST /jobs/mailings/{job_id}/submit`.
 
 ```json
 {
@@ -591,11 +593,11 @@ Overrides the org-level signature default for this job. `full_name`, `bar_number
   "external_reference": "case-10001-notice-q1",
   "recipient_count": 47,
   "cost_estimate": {
-    "document_processing": 0.00,
+    "document_processing": 0.0,
     "usps_postage": 32.17,
     "per_notice_fee": 8.46,
     "subtotal": 40.63,
-    "sales_tax": 0.00,
+    "sales_tax": 0.0,
     "total": 40.63,
     "currency": "USD"
   },
@@ -606,7 +608,7 @@ Overrides the org-level signature default for this job. `full_name`, `bar_number
 
 ---
 
-#### `[CHANGED 2026-06-25]` `POST /jobs/mailings/{job_id}/submit`
+#### `POST /jobs/mailings/{job_id}/submit`
 
 Confirm a `draft` job and release it for printing. The job transitions `draft` → `submitted` and is mailed exactly as estimated — no re-pricing and no second PACER lookup. The onboarding gate is enforced here (not at draft creation): returns `402 payment_required` or `403 terms_not_accepted` if the org isn't cleared, `409 conflict` if the job is not in `draft` status, or `422 validation_error` if the draft has expired.
 
@@ -639,11 +641,11 @@ Get job status and details. **Poll this endpoint to track progress.**
   "recipient_count": 47,
   "certificate_ready": true,
   "cost": {
-    "document_processing": 0.00,
+    "document_processing": 0.0,
     "usps_postage": 32.17,
     "per_notice_fee": 8.46,
     "subtotal": 40.63,
-    "sales_tax": 0.00,
+    "sales_tax": 0.0,
     "total": 40.63,
     "currency": "USD"
   },
@@ -652,20 +654,20 @@ Get job status and details. **Poll this endpoint to track progress.**
 }
 ```
 
-**`[CHANGED 2026-06-25]`** For PACER-sourced jobs the PACER lookup runs at **draft creation**, so `recipient_count` and the cost are known from the `draft` onward (returned as `cost_estimate`). Once the job reaches `completed`, `cost` reflects final actuals.
+For PACER-sourced jobs the PACER lookup runs at **draft creation**, so `recipient_count` and the cost are known from the `draft` onward (returned as `cost_estimate`). Once the job reaches `completed`, `cost` reflects final actuals.
 
 **Job status values:**
 
-| Status | Description |
-|---|---|
-| `draft` | **`[CHANGED 2026-06-25]`** Created with a cost estimate; not yet submitted. Expires after 48h if not confirmed. |
-| `submitted` | Job confirmed and received by CoS |
-| `in_queue` | Queued for printing |
-| `processing` | Being prepared for print |
-| `printing` | Being printed |
-| `completed` | Envelopes mailed; certificate of service available |
-| `cancelled` | Cancelled before printing |
-| `on_hold` | On hold — CoS will reach out if action is needed |
+| Status       | Description                                                                          |
+| ------------ | ------------------------------------------------------------------------------------ |
+| `draft`      | Created with a cost estimate; not yet submitted. Expires after 48h if not confirmed. |
+| `submitted`  | Job confirmed and received by CoS                                                    |
+| `in_queue`   | Queued for printing                                                                  |
+| `processing` | Being prepared for print                                                             |
+| `printing`   | Being printed                                                                        |
+| `completed`  | Envelopes mailed; certificate of service available                                   |
+| `cancelled`  | Cancelled before printing                                                            |
+| `on_hold`    | On hold — CoS will reach out if action is needed                                     |
 
 **Suggested polling interval:** 30 seconds while status is `submitted`, `in_queue`, or `processing`. Once `completed`, stop polling.
 
@@ -677,22 +679,24 @@ List mailing jobs for an organization.
 
 **Query parameters:**
 
-| Param | Type | Description |
-|---|---|---|
-| `organization_id` | string | Required |
-| `status` | string | Filter by status |
-| `case_number` | string | Filter by case number |
-| `external_reference` | string | Filter by your reference ID |
-| `created_after` | ISO 8601 datetime | |
-| `created_before` | ISO 8601 datetime | |
-| `page` | integer | Default 1 |
-| `per_page` | integer | Default 25, max 100 |
+| Param                | Type              | Description                 |
+| -------------------- | ----------------- | --------------------------- |
+| `organization_id`    | string            | Required                    |
+| `status`             | string            | Filter by status            |
+| `case_number`        | string            | Filter by case number       |
+| `external_reference` | string            | Filter by your reference ID |
+| `created_after`      | ISO 8601 datetime |                             |
+| `created_before`     | ISO 8601 datetime |                             |
+| `page`               | integer           | Default 1                   |
+| `per_page`           | integer           | Default 25, max 100         |
 
 **Response `200 OK`:**
 
 ```json
 {
-  "mailings": [ /* array of job objects (same shape as GET /jobs/mailings/{id}) */ ],
+  "mailings": [
+    /* array of job objects (same shape as GET /jobs/mailings/{id}) */
+  ],
   "pagination": {
     "page": 1,
     "per_page": 25,
@@ -730,13 +734,13 @@ Upload a document. Multipart form upload.
 
 **Request:** `multipart/form-data`
 
-| Field | Type | Description |
-|---|---|---|
-| `file` | binary | PDF file. Max 20 MB per file. |
-| `organization_id` | string | Owning org |
-| `role` | string | `standard` (default) \| `ballot` \| `proof_of_claim` |
-| `docket_description` | string | Appears on the certificate of service for this document. Max 85 characters. |
-| `docket_reference_number` | string | Optional document reference number. Max 4 characters. |
+| Field                     | Type   | Description                                                                 |
+| ------------------------- | ------ | --------------------------------------------------------------------------- |
+| `file`                    | binary | PDF file. Max 20 MB per file.                                               |
+| `organization_id`         | string | Owning org                                                                  |
+| `role`                    | string | `standard` (default) \| `ballot` \| `proof_of_claim`                        |
+| `docket_description`      | string | Appears on the certificate of service for this document. Max 85 characters. |
+| `docket_reference_number` | string | Optional document reference number. Max 4 characters.                       |
 
 **Constraints:** PDF only. Max 20 MB per file, max 100 MB total across all documents in a single job.
 
@@ -818,12 +822,12 @@ Returns `null` for all fields until the job reaches `completed` status.
   "job_id": "job_z9y8x7",
   "case_number": "2:24-bk-10001",
   "recipient_count": 47,
-  "document_processing": 0.00,
+  "document_processing": 0.0,
   "usps_postage": 32.17,
   "per_notice_fee": 8.46,
   "per_notice_rate": 0.18,
   "subtotal": 40.63,
-  "sales_tax": 0.00,
+  "sales_tax": 0.0,
   "total": 40.63,
   "currency": "USD"
 }
@@ -847,16 +851,67 @@ All errors return a consistent envelope:
 
 **Error codes:**
 
-| HTTP | Code | Meaning |
-|---|---|---|
-| 400 | `invalid_request` | Missing or malformed field |
-| 401 | `unauthorized` | Invalid or missing API key |
-| 402 | `payment_required` | No valid payment method on file, **or `[CHANGED 2026-06-25]` an unresolved declined payment is blocking new orders** (Stripe-billed orgs only). Check `payment_standing` / `orders_blocked` on `GET .../billing/status`. |
-| 403 | `terms_not_accepted` | **`[CHANGED 2026-06-25]`** Org has not accepted the current Terms of Service; record acceptance via `POST .../terms/acceptance` first (applies only where `terms_required` is `true`). |
-| 403 | `forbidden` | Credential lacks scope for this action |
-| 404 | `not_found` | Resource doesn't exist |
-| 409 | `conflict` | Duplicate `external_reference` (scoped per org) or non-unique phone number |
-| 422 | `validation_error` | Input passes format checks but fails business logic |
-| 422 | `pacer_error` | PACER unavailable or case not found — job not created |
-| 429 | `rate_limited` | Too many requests — see `Retry-After` header |
-| 500 | `internal_error` | CoS-side error |
+| HTTP | Code                 | Meaning                                                                                                                                                                                       |
+| ---- | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 400  | `invalid_request`    | Missing or malformed field                                                                                                                                                                    |
+| 401  | `unauthorized`       | Invalid or missing API key                                                                                                                                                                    |
+| 402  | `payment_required`   | No valid payment method on file, or an unresolved declined payment is blocking new orders (Stripe-billed orgs only). Check `payment_standing` / `orders_blocked` on `GET .../billing/status`. |
+| 403  | `terms_not_accepted` | Org has not accepted the current Terms of Service; record acceptance via `POST .../terms/acceptance` first (applies only where `terms_required` is `true`).                                   |
+| 403  | `forbidden`          | Credential lacks scope for this action                                                                                                                                                        |
+| 404  | `not_found`          | Resource doesn't exist                                                                                                                                                                        |
+| 409  | `conflict`           | Duplicate `external_reference` (scoped per org) or non-unique phone number                                                                                                                    |
+| 422  | `validation_error`   | Input passes format checks but fails business logic                                                                                                                                           |
+| 422  | `pacer_error`        | PACER unavailable or case not found — job not created                                                                                                                                         |
+| 429  | `rate_limited`       | Too many requests — see `Retry-After` header                                                                                                                                                  |
+| 500  | `internal_error`     | CoS-side error                                                                                                                                                                                |
+
+---
+
+## Changelog
+
+### 2026-06-25
+
+> **Revision note (2026-06-25):** This copy incorporates the partner asks raised since the June 5 draft (partner discovery conversations in June). Main additions: onboarding gate + terms-of-service acceptance; declined-payment semantics on billing status; a `draft` → estimate → submit job flow (pre-submission invoice estimate); organization tenancy + lookup by `external_id`; a partner-configuration note; and `4up` flagged as not yet supported by the backend.
+
+**Organizations**
+
+- All organization endpoints are now scoped to the authenticating partner's API key. A partner can only access organizations it created; requesting an `organization_id` belonging to another partner returns `404 not_found`.
+- Added `GET /organizations` — list organizations belonging to the authenticating partner, with optional `external_id` filter for cross-reference lookup.
+- Added `external_id` field to `POST /organizations` and `PATCH /organizations/{id}` — partners can store their own internal ID for each org.
+
+**Partner configuration**
+
+- Documented partner-level configuration settings (billing mode, terms required) that are set by CoS during onboarding. These are not configurable via the API.
+
+**Onboarding gate**
+
+- Organizations configured for Stripe billing must satisfy two conditions before jobs can be submitted: (1) a valid payment method on file and (2) acceptance of the current CoS Terms of Service. Each condition can be checked independently via the billing and terms status endpoints.
+
+**Billing**
+
+- Added `payment_standing` field to `GET .../billing/status`: `"ok"` | `"declined"` | `"past_due"`.
+- Added `orders_blocked` boolean to `GET .../billing/status` — `true` when an unresolved declined payment is blocking new job submissions.
+- Added `outstanding_balance` field to `GET .../billing/status`.
+- When `orders_blocked` is `true`, `POST /jobs/mailings/{id}/submit` returns `402 payment_required`. Draft creation and estimation are still permitted.
+
+**Terms of Service** _(new section)_
+
+- Added `GET /organizations/{id}/terms/status` — check whether the org has accepted the current Terms of Service.
+- Added `POST /organizations/{id}/terms/acceptance` — record acceptance after the partner's customer completes the acceptance flow in the partner UI.
+
+**Jobs**
+
+- `POST /jobs/mailings` now creates a job in `draft` status and returns an itemized `cost_estimate`. The job is not released for printing until confirmed via `POST /jobs/mailings/{id}/submit`.
+- For PACER-sourced jobs, the PACER lookup now runs at draft creation so the cost estimate reflects the actual recipient list.
+- A draft that is never submitted expires after 48 hours.
+- Added `POST /jobs/mailings/{id}/submit` — confirms a draft and transitions it to `submitted`. The onboarding gate is enforced at this step.
+- Added `draft` to job status values.
+- Added `cost_estimate` to the `POST /jobs/mailings` response (pre-submission) and `cost` to the `GET /jobs/mailings/{id}` response (post-completion).
+
+**Order preferences**
+
+- `4up` format is not yet supported by the backend print pipeline (only `1up` and `2up` are implemented).
+
+### 2026-06-05
+
+- Initial working draft published.
