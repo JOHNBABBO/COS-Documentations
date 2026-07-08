@@ -77,6 +77,10 @@ Provision a new organization.
 
 > **v1 note:** Only US addresses are supported. The `address` object is structured to accommodate international addresses in a future release.
 
+**Account setup.** When an organization is provisioned, CoS automatically sends a welcome email to the `contact_email` address with a link to set a password on the CoS platform. This is a one-time step that lets the customer access CoS directly if needed. In most partner integrations, customers set their password once and continue to operate entirely within your platform. The email is sent from a CoS email address.
+
+**One organization per customer.** Each customer should be provisioned as a single organization. Creating duplicate organizations for the same customer is not supported.
+
 **Request body:**
 
 ```json
@@ -306,6 +310,8 @@ Update any subset of the organization's settings. Omitted fields are preserved.
 
 ### Billing
 
+Payment collection is handled through an embedded Stripe flow hosted within your platform. CoS stores only the Stripe payment token — no raw card or bank account details are ever held by CoS. Customers who need to update their payment method must go through a new Stripe setup flow, which you initiate via `POST /organizations/{id}/billing/setup`.
+
 ---
 
 #### `POST /organizations/{organization_id}/billing/setup`
@@ -441,6 +447,16 @@ Record that the organization has accepted the current Terms of Service. The part
 ### Jobs
 
 All mailing jobs live under `/jobs/mailings`. This path is structured to allow other job categories to be added in the future without breaking existing integrations.
+
+---
+
+**Job timing and cancellation windows.** Once a job is submitted, there is a window during which it can be edited or cancelled before it locks in for printing:
+
+- **Normal service, submitted before noon PST** — the job locks in 15 minutes after submission. Cancellation is available up until that point.
+- **Rush service, submitted after noon PST** — the job also locks in 15 minutes after submission regardless of time of day.
+- **Deferred jobs** (normal service, submitted after noon PST) — the job does not enter the print queue until the end of the business day at 4:00 PM PST. Cancellation is available any time before 4:00 PM PST on the day of submission.
+
+Cancellation is only possible while the job is in `in_queue` status. Once a job advances to `processing` or beyond, it cannot be cancelled.
 
 ---
 
@@ -709,7 +725,7 @@ List mailing jobs for an organization.
 
 #### `POST /jobs/mailings/{job_id}/cancel`
 
-Cancel a job. Only valid while status is `submitted` or `in_queue`.
+Cancel a job. Only valid while the job is in `in_queue` status.
 
 **Response `200 OK`:**
 
@@ -868,6 +884,26 @@ All errors return a consistent envelope:
 ---
 
 ## Changelog
+
+### 2026-07-08
+
+**Organizations — `POST /organizations`**
+
+- Added account setup note: CoS sends a welcome email to `contact_email` on provisioning with a one-time password setup link. Email is sent from a CoS email address.
+- Added note clarifying that each customer should be provisioned as a single organization.
+
+**Jobs — cancellation and timing**
+
+- Added a **Job timing and cancellation windows** section describing when jobs lock in for printing and when cancellation is permitted:
+  - Normal service pre-noon and rush service jobs lock in 15 minutes after submission.
+  - Deferred jobs (normal service, submitted post-noon) lock in at 4:00 PM PST on the day of submission.
+  - Cancellation is only available while the job is in `in_queue` status.
+
+**Billing**
+
+- Added an introductory note to the Billing section clarifying that payment is collected through an embedded Stripe flow within the partner platform, that CoS stores only the Stripe token (not raw payment details), and that customers update payment details by initiating a new Stripe setup flow via `POST /organizations/{id}/billing/setup`.
+
+---
 
 ### 2026-06-25
 
