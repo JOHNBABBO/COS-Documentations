@@ -67,7 +67,7 @@ Organization (a firm or trustee account in your platform)
 
 An **organization** represents a firm or customer account within your platform. Partners can provision organizations programmatically.
 
-**Tenancy.** Every organization endpoint is scoped to the authenticating partner's API key. A partner can only read, update, or list organizations it created; requesting an `organization_id` that belongs to another partner returns `404 not_found`. Organizations are managed entirely under the partner key — there are no per-organization logins or passwords.
+**Tenancy.** Every organization endpoint is scoped to the authenticating partner's API key. A partner can only read, update, or list organizations it created; requesting an `organization_id` that belongs to another partner returns `404 not_found`. Organizations are managed entirely under the partner key.
 
 ---
 
