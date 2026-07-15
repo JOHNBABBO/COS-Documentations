@@ -2,7 +2,7 @@
 
 > **Status:** Working draft. Endpoints are subject to change prior to general availability.
 >
-> **Revision note (2026-07-14):** This copy incorporates the amendments agreed in the 2026-07-14 CoS ↔ Verita working session. All additions/edits are tagged inline with **`[CHANGED 2026-07-14]`** so they can be reviewed before merging. Main additions: organization-level **contacts**, **return addresses**, and **signatures** are now reusable, multi-record collections with their own nested endpoints and default semantics; jobs can reference saved records by ID or override inline (with explicit precedence rules); a per-job **notifications** block (primary email + CC list); `debtor_name`, `chapter`, and `judge_name` added to `bankruptcy_options` and echoed on job responses; PACER/case errors split into distinct codes including a first-class `debtor_name_mismatch`; draft **snapshot** semantics for referenced saved records; and a backward-compatibility path for the legacy singular fields.
+> **Revision note (2026-07-14):** This copy incorporates the amendments agreed in the 2026-07-14 CoS ↔ Verita working session. All additions/edits are tagged inline with **`[CHANGED 2026-07-14]`** so they can be reviewed before merging. Main additions: organization-level **contacts**, **return addresses**, and **signatures** are now reusable, multi-record collections with their own nested endpoints and default semantics; jobs can reference saved records by ID or override inline (with explicit precedence rules); a per-job **notifications** block (primary email + CC list); `debtor_name`, `chapter`, and `judge_name` added to `bankruptcy_options` and echoed on job responses; PACER/case errors split into distinct codes including a first-class `debtor_name_mismatch`; and draft **snapshot** semantics for referenced saved records. The singular `contact_email` / `company_phone_number` fields and the singular `settings.return_address` / `settings.signature` objects from earlier drafts are **removed outright** in favor of the collections — no integrations are live against this API, so no deprecation path is carried.
 >
 > **Revision note (2026-06-25):** This copy incorporates the partner asks raised since the June 5 draft (partner discovery conversations in June). Main additions: onboarding gate + terms-of-service acceptance; declined-payment semantics on billing status; a `draft` → estimate → submit job flow (pre-submission invoice estimate); organization tenancy + lookup by `external_id`; a partner-configuration note; and `4up` flagged as not yet supported by the backend.
 ---
@@ -84,11 +84,11 @@ An **organization** represents a firm or customer account within your platform. 
 Provision a new organization.
 > **v1 note:** Only US addresses are supported. The `address` object is structured to accommodate international addresses in a future release.
 
-**Account setup.** When an organization is provisioned, CoS automatically sends a welcome email to the `contact_email` address with a link to set a password on the CoS platform. This is a one-time step that lets the customer access CoS directly if needed. In most partner integrations, customers set their password once and continue to operate entirely within your platform. The email is sent from a CoS email address.
+**Account setup.** When an organization is provisioned, CoS automatically sends a welcome email to the initial default contact's email with a link to set a password on the CoS platform. This is a one-time step that lets the customer access CoS directly if needed. In most partner integrations, customers set their password once and continue to operate entirely within your platform. The email is sent from a CoS email address.
 
 **One organization per customer.** Each customer should be provisioned as a single organization. Creating duplicate organizations for the same customer is not supported.
 
-**`[CHANGED 2026-07-14]` Legacy contact fields.** `contact_email` and `company_phone_number` are retained for backward compatibility as **legacy shorthand for the organization's default contact**. When supplied at provisioning, CoS creates a saved contact record from them with `is_default: true`. New integrations should manage contacts through the [Organization Contacts](#organization-contacts) endpoints instead. These fields will be deprecated once partner integrations have migrated to the contacts collection.
+**`[CHANGED 2026-07-14]` Initial contact.** Provisioning takes a `contact` object, which is created as the organization's first saved contact with `is_default: true`. Additional contacts are managed through the [Organization Contacts](#organization-contacts) endpoints. The `contact_email` and `company_phone_number` fields from earlier drafts are removed.
 
 **Request body:**
 
@@ -96,8 +96,12 @@ Provision a new organization.
 {
   "name": "Hoffman & Associates, PC",
   "external_id": "tfs-firm-4821",
-  "contact_email": "billing@hoffmanpc.com",
-  "company_phone_number": "213-555-0100",
+  "contact": {
+    "name": "Nancy Hoffman",
+    "email": "billing@hoffmanpc.com",
+    "phone": "213-555-0100",
+    "role": "admin"
+  },
   "address": {
     "line1": "350 S Grand Ave, Suite 2200",
     "line2": null,
@@ -113,8 +117,7 @@ Provision a new organization.
 | ---------------------- | ------ | -------- | ---------------------------------------------------------- |
 | `name`                 | string | ✓        | Firm or organization name                                  |
 | `external_id`          | string |          | Your internal ID for this org — stored for cross-reference |
-| `contact_email`        | string | ✓        | Legacy shorthand for default contact email `[CHANGED 2026-07-14]` |
-| `company_phone_number` | string | ✓        | Legacy shorthand for default contact phone. Must be unique across organizations. `[CHANGED 2026-07-14]` |
+| `contact`              | object | ✓        | Initial default contact `[CHANGED 2026-07-14]` — see [Organization Contacts](#organization-contacts) for field rules. `email` required; `phone` must be unique across organizations (used for account matching). |
 | `address.line1`        | string | ✓        |                                                            |
 | `address.line2`        | string |          |                                                            |
 | `address.city`         | string | ✓        |                                                            |
@@ -129,8 +132,14 @@ Provision a new organization.
   "organization_id": "org_a1b2c3",
   "name": "Hoffman & Associates, PC",
   "external_id": "tfs-firm-4821",
-  "contact_email": "billing@hoffmanpc.com",
-  "company_phone_number": "213-555-0100",
+  "contact": {
+    "contact_id": "con_123",
+    "name": "Nancy Hoffman",
+    "email": "billing@hoffmanpc.com",
+    "phone": "213-555-0100",
+    "role": "admin",
+    "is_default": true
+  },
   "address": {
     "line1": "350 S Grand Ave, Suite 2200",
     "line2": null,
@@ -190,7 +199,7 @@ Update organization details (name, contact info, external ID, address). Scoped t
 
 **Request body:** any subset of the `POST /organizations` fields.
 
-**`[CHANGED 2026-07-14]`** Patching the legacy `contact_email` / `company_phone_number` fields updates the organization's **default contact record**. Collection mutation (adding/removing contacts, return addresses, or signatures) is **not** performed through this endpoint — use the nested resource endpoints below.
+**`[CHANGED 2026-07-14]`** This endpoint covers org metadata only (name, external ID, address). Contacts, return addresses, and signatures are managed exclusively through the nested resource endpoints below.
 
 ---
 
@@ -224,8 +233,8 @@ Update organization details (name, contact info, external ID, address). Scoped t
 
 **Behavior:**
 
-- An organization always has **at least one contact**: the record created from the legacy `contact_email` / `company_phone_number` fields at provisioning is the initial default. The last remaining contact cannot be deleted.
-- Contact uniqueness is enforced on `email` within an organization (`409 conflict` on duplicates). `phone` is not required to be unique across contacts within the same organization — different trustees within a trustee group may share a phone number.
+- An organization always has **at least one contact**: the `contact` supplied at provisioning becomes the initial default. The last remaining contact cannot be deleted.
+- Contact uniqueness is enforced on `email` within an organization (`409 conflict` on duplicates). `phone` is not required to be unique across contacts within the same organization — different trustees within a trustee group may share a phone number. The **default contact's phone** must be unique **across organizations** (CoS uses it for account matching/linkage).
 - If a job omits all notification email fields, the fallback chain is: selected `contact_id`'s email → org default contact's email. See [Job notifications](#job-notifications).
 - Default lifecycle rules are shared across all saved-record types — see [Defaults: lifecycle rules](#defaults-lifecycle-rules).
 
@@ -253,7 +262,7 @@ Delete a saved contact. See [Deletion rules](#deletion-rules-for-saved-records).
 
 ### Organization Return Addresses
 
-**`[CHANGED 2026-07-14]`** *New section.* An organization may need **multiple return addresses**, and jobs may need to select a specific one rather than relying on a single global default. Each saved return address has a stable ID, a required label (`name`), and an optional default flag. The previous singular `settings.return_address` object is deprecated (see [Backward compatibility](#backward-compatibility)).
+**`[CHANGED 2026-07-14]`** *New section.* An organization may need **multiple return addresses**, and jobs may need to select a specific one rather than relying on a single global default. Each saved return address has a stable ID, a required label (`name`), and an optional default flag. This replaces the singular `settings.return_address` object from earlier drafts.
 
 **Return address resource:**
 
@@ -315,7 +324,7 @@ Delete a saved return address. See [Deletion rules](#deletion-rules-for-saved-re
 
 ### Organization Signatures
 
-**`[CHANGED 2026-07-14]`** *New section.* Organizations can save **multiple certificate signatures** — the signatory role differs by case (Chapter 7 trustee, Chapter 11 trustee, attorney, trustee in possession, etc.) — and select one per job. The previous singular `settings.signature` object is deprecated (see [Backward compatibility](#backward-compatibility)).
+**`[CHANGED 2026-07-14]`** *New section.* Organizations can save **multiple certificate signatures** — the signatory role differs by case (Chapter 7 trustee, Chapter 11 trustee, attorney, trustee in possession, etc.) — and select one per job. This replaces the singular `settings.signature` object from earlier drafts.
 
 **Signature resource:**
 
@@ -409,7 +418,7 @@ Delete a saved signature. See [Deletion rules](#deletion-rules-for-saved-records
 
 Firm-level defaults applied to every job submitted by that organization unless overridden at the job level.
 
-**`[CHANGED 2026-07-14]`** Settings now carries only true org-level defaults: `default_court`, `order_preferences`, and read-only pointers to the current default saved records. The singular `return_address` and `signature` objects previously stored here are **deprecated** — they now surface the current default saved record for backward compatibility, and patching them updates that default record. New integrations should use the nested collection endpoints.
+**`[CHANGED 2026-07-14]`** Settings now carries only true org-level defaults: `default_court`, `order_preferences`, and read-only pointers to the current default saved records. The singular `return_address` and `signature` objects previously stored here are removed — those records live in the nested collections.
 
 ---
 
@@ -433,9 +442,7 @@ Firm-level defaults applied to every job submitted by that organization unless o
     "format": "2up",
     "service": "normal",
     "mail_class": "first_class"
-  },
-  "return_address": { /* DEPRECATED — echo of the current default return address record */ },
-  "signature": { /* DEPRECATED — echo of the current default signature record */ }
+  }
 }
 ```
 
@@ -446,7 +453,6 @@ Firm-level defaults applied to every job submitted by that organization unless o
 | `default_signature_id`       | string \| null | Read-only pointer to the default signature.                                           |
 | `default_court`              | object         | `state`, `district`, optional `division`                                              |
 | `order_preferences`          | object         | See field reference below                                                             |
-| `return_address`, `signature`| object \| null | **Deprecated.** Legacy echo of the default saved records; `null` when no default set. |
 
 **`order_preferences` field reference:**
 
@@ -463,7 +469,7 @@ Firm-level defaults applied to every job submitted by that organization unless o
 
 Update any subset of the organization's settings. Omitted fields are preserved.
 
-**`[CHANGED 2026-07-14]`** This endpoint no longer performs collection mutation. Sending the legacy singular `return_address` or `signature` object updates the **current default saved record** of that type (creating one if none exists). It cannot add additional records, delete records, or change which record is the default — use the nested resource endpoints (`POST` to create, `PATCH` to update one record, `DELETE` to remove one record).
+**`[CHANGED 2026-07-14]`** This endpoint accepts only `default_court` and `order_preferences`. Contacts, return addresses, and signatures are managed exclusively through their nested resource endpoints (`POST` to create, `PATCH` to update one record, `DELETE` to remove one record).
 
 **Request body:**
 
@@ -746,7 +752,7 @@ Each object in the `documents` array corresponds positionally to a file in the `
 
 Use `"pacer"` to pull the recipient list from PACER using the submitted court and case number. Use `"user_supplied"` to supply addresses directly.
 
-**`[CHANGED 2026-07-14]`** If the PACER/case lookup fails, draft creation returns a `422` with one of the specific case-resolution codes: `pacer_unavailable`, `case_not_found`, `case_ambiguous`, or `debtor_name_mismatch` (see [Errors](#errors)). The blanket `pacer_error` code is deprecated.
+**`[CHANGED 2026-07-14]`** If the PACER/case lookup fails, draft creation returns a `422` with one of the specific case-resolution codes: `pacer_unavailable`, `case_not_found`, `case_ambiguous`, or `debtor_name_mismatch` (see [Errors](#errors)).
 
 **Recipient object (when `source = "user_supplied"`):**
 
@@ -1087,7 +1093,6 @@ All errors return a consistent envelope:
 | 422  | `validation_error`   | Input passes format checks but fails business logic                                                                                                                                           |
 | 422  | `default_required`   | `[CHANGED 2026-07-14]` Job supplied neither an inline override nor a saved-record reference, and the org has no default for that record type                                                  |
 | 422  | `multiple_defaults_not_allowed` | `[CHANGED 2026-07-14]` Request would result in more than one default record of a type                                                                                              |
-| 422  | `cannot_delete_default_without_replacement` | `[CHANGED 2026-07-14]` Reserved — returned only if the partner is configured to require an always-present default                                                      |
 | 422  | `invalid_notification_email` | `[CHANGED 2026-07-14]` A `notifications` email failed format validation                                                                                                               |
 | 422  | `too_many_cc_emails` | `[CHANGED 2026-07-14]` `notifications.cc_emails` exceeds the maximum of 10                                                                                                                    |
 | 422  | `missing_contact_email` | `[CHANGED 2026-07-14]` No notification email could be resolved (no `primary_email`, no contact email, no org default contact)                                                              |
@@ -1095,7 +1100,6 @@ All errors return a consistent envelope:
 | 422  | `case_not_found`     | `[CHANGED 2026-07-14]` No case found for the supplied case number / court location                                                                                                            |
 | 422  | `case_ambiguous`     | `[CHANGED 2026-07-14]` Multiple possible cases matched — supply `court_location.division` and/or `debtor_name` to disambiguate                                                                |
 | 422  | `debtor_name_mismatch` | `[CHANGED 2026-07-14]` Supplied `debtor_name` did not match the PACER-resolved case (see example below)                                                                                     |
-| 422  | ~~`pacer_error`~~    | **Deprecated** `[CHANGED 2026-07-14]` — replaced by the four case-resolution codes above                                                                                                      |
 | 429  | `rate_limited`       | Too many requests — see `Retry-After` header                                                                                                                                                  |
 | 500  | `internal_error`     | CoS-side error                                                                                                                                                                                |
 
@@ -1149,23 +1153,6 @@ All errors return a consistent envelope:
 
 ---
 
-## Backward compatibility
-
-**`[CHANGED 2026-07-14]`** *New section.* v1 supports both the legacy singular forms and the new collections during the transition:
-
-| Legacy field | Status | Behavior |
-| --- | --- | --- |
-| `contact_email` (org) | Deprecated | Legacy shorthand for the **default contact's email**. Reading returns the default contact's email; writing updates it. |
-| `company_phone_number` (org) | Deprecated | Legacy shorthand for the **default contact's phone**. Uniqueness across organizations still enforced. |
-| `settings.return_address` (singular) | Deprecated | Echoes / updates the **default saved return address**. Cannot add, delete, or re-default records. |
-| `settings.signature` (singular) | Deprecated | Echoes / updates the **default saved signature**. Cannot add, delete, or re-default records. |
-| Inline `return_address` / `signature` on jobs | **Supported (not deprecated)** | Remain valid as one-off, highest-precedence overrides. |
-| `pacer_error` | Deprecated | Replaced by `pacer_unavailable`, `case_not_found`, `case_ambiguous`, `debtor_name_mismatch`. Partners should handle the specific codes; the blanket code will be removed after the transition window. |
-
-Deprecated fields will continue to work until partner integrations have migrated; removal will be announced with a version bump and transition window.
-
----
-
 ## Changelog
 
 ### 2026-07-14
@@ -1178,12 +1165,12 @@ Deprecated fields will continue to work until partner integrations have migrated
 - Added **Organization Return Addresses**: multiple named return addresses per org with a stable `return_address_id`, a required `name` label, and at most one default. Nested CRUD endpoints at `/organizations/{id}/return-addresses`.
 - Added **Organization Signatures**: multiple named certificate signatures per org (roles differ by case — Chapter 7 trustee, Chapter 11 trustee, attorney, trustee in possession, etc.), with at most one default. Nested CRUD endpoints at `/organizations/{id}/signatures`.
 - Documented **default lifecycle rules** (zero-or-one default per type; setting a new default clears the previous one; jobs with no resolvable record are rejected with `default_required`) and **deletion rules** (defaults deletable; snapshotting makes deletes safe for in-flight jobs; last contact not deletable).
-- `contact_email` and `company_phone_number` on the organization are now documented as **legacy shorthand for the default contact** and marked deprecated. Phone uniqueness across organizations is unchanged; contacts within one organization may share a phone number.
+- `contact_email` and `company_phone_number` on the organization are **removed**; `POST /organizations` now takes an initial `contact` object that becomes the default contact. The default contact's phone must be unique across organizations (account matching); contacts within one organization may share a phone number.
 
 **Organization Settings — narrowed scope**
 
 - `settings` now carries only true settings: `default_court`, `order_preferences`, and read-only default pointers (`default_contact_id`, `default_return_address_id`, `default_signature_id`).
-- The singular `return_address` and `signature` objects in settings are deprecated. `PATCH .../settings` no longer performs collection mutation — the legacy singular objects update only the current default record. Add/update/delete of individual records goes through the nested resource endpoints (`POST` / `PATCH` / `DELETE`).
+- The singular `return_address` and `signature` objects in settings are **removed**. `PATCH .../settings` accepts only `default_court` and `order_preferences`; add/update/delete of individual records goes through the nested resource endpoints (`POST` / `PATCH` / `DELETE`).
 
 **Jobs — saved-record references, overrides, and precedence**
 
@@ -1205,17 +1192,13 @@ Deprecated fields will continue to work until partner integrations have migrated
 
 **Errors**
 
-- Split the blanket `pacer_error` into `pacer_unavailable`, `case_not_found`, `case_ambiguous`, and `debtor_name_mismatch` (deprecating `pacer_error`).
-- Added saved-record errors (`contact_not_found`, `return_address_not_found`, `signature_not_found`), default-management errors (`default_required`, `multiple_defaults_not_allowed`, `cannot_delete_default_without_replacement`), and notification errors (`invalid_notification_email`, `too_many_cc_emails`, `missing_contact_email`).
+- Replaced the blanket `pacer_error` with `pacer_unavailable`, `case_not_found`, `case_ambiguous`, and `debtor_name_mismatch`.
+- Added saved-record errors (`contact_not_found`, `return_address_not_found`, `signature_not_found`), default-management errors (`default_required`, `multiple_defaults_not_allowed`), and notification errors (`invalid_notification_email`, `too_many_cc_emails`, `missing_contact_email`).
 - Added worked examples for `debtor_name_mismatch`, `case_ambiguous`, and `default_required`.
 
 **Terms of Service**
 
 - Softened the display prose: the partner may link out to the canonical CoS-hosted ToS URL or render the text; the acceptance UX (e.g. first-use checkbox) is a partner decision agreed during onboarding. The API contract only requires that acceptance be recorded before first submit where `terms_required` is `true`.
-
-**Backward compatibility** *(new section)*
-
-- Added a table covering the deprecation status and transition behavior of `contact_email`, `company_phone_number`, singular `settings.return_address` / `settings.signature`, inline job overrides (retained), and `pacer_error`.
 
 ---
 
