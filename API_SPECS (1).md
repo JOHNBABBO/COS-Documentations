@@ -2,8 +2,9 @@
 
 > **Status:** Working draft. Endpoints are subject to change prior to general availability.
 >
-> **Revision note (2026-06-25):** This copy incorporates the partner asks raised since the June 5 draft (partner discovery conversations in June). All additions/edits are tagged inline with **`[CHANGED 2026-06-25]`** so they can be reviewed before merging. Main additions: onboarding gate + terms-of-service acceptance; declined-payment semantics on billing status; a `draft` → estimate → submit job flow (pre-submission invoice estimate); organization tenancy + lookup by `external_id`; a partner-configuration note; and `4up` flagged as not yet supported by the backend.
-
+> **Revision note (2026-07-14):** This copy incorporates the amendments agreed in the 2026-07-14 CoS ↔ Verita working session. All additions/edits are tagged inline with **`[CHANGED 2026-07-14]`** so they can be reviewed before merging. Main additions: organization-level **contacts**, **return addresses**, and **signatures** are now reusable, multi-record collections with their own nested endpoints and default semantics; jobs can reference saved records by ID or override inline (with explicit precedence rules); a per-job **notifications** block (primary email + CC list); `debtor_name`, `chapter`, and `judge_name` added to `bankruptcy_options` and echoed on job responses; PACER/case errors split into distinct codes including a first-class `debtor_name_mismatch`; draft **snapshot** semantics for referenced saved records; and a backward-compatibility path for the legacy singular fields.
+>
+> **Revision note (2026-06-25):** This copy incorporates the partner asks raised since the June 5 draft (partner discovery conversations in June). Main additions: onboarding gate + terms-of-service acceptance; declined-payment semantics on billing status; a `draft` → estimate → submit job flow (pre-submission invoice estimate); organization tenancy + lookup by `external_id`; a partner-configuration note; and `4up` flagged as not yet supported by the backend.
 ---
 
 ## Overview
@@ -12,7 +13,7 @@ The CoS Partner API allows integration partners to submit physical mailing jobs,
 
 Billing is optional and configured per your business agreement with CoS. Organizations are set up for either direct Stripe payment (card or ACH) or monthly invoicing — this is determined during onboarding and is transparent to the API. When billing is enabled via Stripe, a valid payment method must be on file before jobs can be submitted.
 
-**Onboarding gate.** For partners whose customers pay CoS directly, an organization must clear a two-condition **onboarding gate** before it can submit jobs: **(1) a valid payment method is on file** _and_ **(2) the customer has accepted the current CoS Terms of Service.** Either condition can be checked independently (see `GET /organizations/{id}/billing/status` and `GET /organizations/{id}/terms/status`). For partners not configured to require direct payment or terms (the default), both conditions are treated as satisfied automatically and customers are never prompted.
+**Onboarding gate.** For partners whose customers pay CoS directly, an organization must clear a two-condition **onboarding gate** before it can submit jobs: **(1) a valid payment method is on file** *and* **(2) the customer has accepted the current CoS Terms of Service.** Either condition can be checked independently (see `GET /organizations/{id}/billing/status` and `GET /organizations/{id}/terms/status`). For partners not configured to require direct payment or terms (the default), both conditions are treated as satisfied automatically and customers are never prompted.
 
 **Base URL:** `https://api.certificateofservice.com/v1/cos`
 
@@ -35,26 +36,33 @@ Authorization: Bearer <api-key>
 
 > A small number of settings are configured by CoS per your business agreement during onboarding. **You cannot change these via the API** — they're documented here only so you understand how your integration will behave. They apply to every organization you provision.
 
-| Setting            | Values                        | What it changes for you                                                                                                                                                                                                                                                               |
-| ------------------ | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Setting            | Values                        | What it changes for you                                                                                                                                                                                  |
+| ------------------ | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Billing mode**   | `stripe` \| `monthly_invoice` | `stripe`: your customers pay CoS directly; `billing/setup` and `billing/status` are active and a valid payment method is required before jobs can be submitted. `monthly_invoice`: CoS invoices in arrears; the `billing/*` endpoints return `403` and no payment method is required. |
-| **Terms required** | `true` \| `false`             | When `true`, each customer must accept the CoS Terms of Service before jobs can be submitted (observable via `GET /organizations/{id}/terms/status`). When `false`, terms are treated as accepted automatically and customers are never prompted.                                     |
+| **Terms required** | `true` \| `false`             | When `true`, each customer must accept the CoS Terms of Service before jobs can be submitted (observable via `GET /organizations/{id}/terms/status`). When `false`, terms are treated as accepted automatically and customers are never prompted. |
 
-A “payment method required” gate is **not** a separate setting — it is implied by billing mode (`stripe` always requires one; `monthly_invoice` never does). The onboarding gate for an organization is therefore: _(payment method on file, if billing mode is `stripe`)_ **and** _(terms accepted, if terms required)_.
+A "payment method required" gate is **not** a separate setting — it is implied by billing mode (`stripe` always requires one; `monthly_invoice` never does). The onboarding gate for an organization is therefore: *(payment method on file, if billing mode is `stripe`)* **and** *(terms accepted, if terms required)*.
 
 ---
 
 ## Data Model
 
+**`[CHANGED 2026-07-14]`** Contacts, return addresses, and signatures are now **reusable collections** on the organization rather than single settings values. Jobs may reference a saved record by ID, override inline, or fall back to the org default.
+
 ```
 Organization (a firm or trustee account in your platform)
-  └── Settings (return_address, signature, default_court, order_preferences)
+  └── Contacts (saved contact records; zero or one default)
+  └── Return Addresses (saved return address records; zero or one default)
+  └── Signatures (saved certificate signature records; zero or one default)
+  └── Settings (default_court, order_preferences, default pointers)
   └── Billing (optional — Stripe or monthly invoice, per partner agreement)
         └── Payment method (Stripe only; required before submitting jobs if Stripe billing is enabled)
   └── Jobs
         └── Mailings
               ├── Documents (uploaded PDFs)
               ├── Recipients (PACER pull or provided)
+              ├── Notifications (primary email + CC list)
+              ├── Snapshot of referenced contact / return address / signature
               ├── Cost breakdown
               └── Certificate (PDF, available on completion)
 ```
@@ -74,16 +82,17 @@ An **organization** represents a firm or customer account within your platform. 
 #### `POST /organizations`
 
 Provision a new organization.
-
 > **v1 note:** Only US addresses are supported. The `address` object is structured to accommodate international addresses in a future release.
 
 **Account setup.** When an organization is provisioned, CoS automatically sends a welcome email to the `contact_email` address with a link to set a password on the CoS platform. This is a one-time step that lets the customer access CoS directly if needed. In most partner integrations, customers set their password once and continue to operate entirely within your platform. The email is sent from a CoS email address.
 
 **One organization per customer.** Each customer should be provisioned as a single organization. Creating duplicate organizations for the same customer is not supported.
 
+**`[CHANGED 2026-07-14]` Legacy contact fields.** `contact_email` and `company_phone_number` are retained for backward compatibility as **legacy shorthand for the organization's default contact**. When supplied at provisioning, CoS creates a saved contact record from them with `is_default: true`. New integrations should manage contacts through the [Organization Contacts](#organization-contacts) endpoints instead. These fields will be deprecated once partner integrations have migrated to the contacts collection.
+
 **Request body:**
 
-```json
+```
 {
   "name": "Hoffman & Associates, PC",
   "external_id": "tfs-firm-4821",
@@ -104,8 +113,8 @@ Provision a new organization.
 | ---------------------- | ------ | -------- | ---------------------------------------------------------- |
 | `name`                 | string | ✓        | Firm or organization name                                  |
 | `external_id`          | string |          | Your internal ID for this org — stored for cross-reference |
-| `contact_email`        | string | ✓        | Primary contact email                                      |
-| `company_phone_number` | string | ✓        | Must be unique                                             |
+| `contact_email`        | string | ✓        | Legacy shorthand for default contact email `[CHANGED 2026-07-14]` |
+| `company_phone_number` | string | ✓        | Legacy shorthand for default contact phone. Must be unique across organizations. `[CHANGED 2026-07-14]` |
 | `address.line1`        | string | ✓        |                                                            |
 | `address.line2`        | string |          |                                                            |
 | `address.city`         | string | ✓        |                                                            |
@@ -115,7 +124,7 @@ Provision a new organization.
 
 **Response `201 Created`:**
 
-```json
+```
 {
   "organization_id": "org_a1b2c3",
   "name": "Hoffman & Associates, PC",
@@ -158,7 +167,7 @@ List organizations belonging to the authenticating partner. **Results are always
 
 **Response `200 OK`:**
 
-```json
+```
 {
   "organizations": [
     /* array of organization objects, same shape as GET /organizations/{id} */
@@ -181,11 +190,226 @@ Update organization details (name, contact info, external ID, address). Scoped t
 
 **Request body:** any subset of the `POST /organizations` fields.
 
+**`[CHANGED 2026-07-14]`** Patching the legacy `contact_email` / `company_phone_number` fields updates the organization's **default contact record**. Collection mutation (adding/removing contacts, return addresses, or signatures) is **not** performed through this endpoint — use the nested resource endpoints below.
+
+---
+
+### Organization Contacts
+
+**`[CHANGED 2026-07-14]`** *New section.* Saved contact records for an organization. Different trustees/users within the same trustee group may need different phone and email values, so an organization can now store **multiple contacts**, optionally marking one as the default. Jobs can rely on the default contact, reference a specific saved contact by `contact_id`, or override notification values one-off (see [Jobs](#jobs)).
+
+**Contact resource:**
+
+```
+{
+  "contact_id": "con_123",
+  "name": "Nancy Hoffman",
+  "email": "nancy@hoffmanpc.com",
+  "phone": "213-555-0100",
+  "role": "admin",
+  "is_default": true,
+  "created_at": "2026-07-14T18:00:00Z",
+  "updated_at": "2026-07-14T18:00:00Z"
+}
+```
+
+| Field        | Type    | Required | Notes                                                                    |
+| ------------ | ------- | -------- | ------------------------------------------------------------------------ |
+| `contact_id` | string  | —        | Generated by CoS                                                         |
+| `name`       | string  |          | Optional but recommended                                                 |
+| `email`      | string  | ✓        | Required — the default contact's email receives job lifecycle notifications when no job-level email is supplied |
+| `phone`      | string  |          |                                                                          |
+| `role`       | string  |          | Free-form label, e.g. `"admin"`, `"trustee"`, `"operations"`             |
+| `is_default` | boolean |          | At most one default per organization. Defaults to `false`.               |
+
+**Behavior:**
+
+- An organization always has **at least one contact**: the record created from the legacy `contact_email` / `company_phone_number` fields at provisioning is the initial default. The last remaining contact cannot be deleted.
+- Contact uniqueness is enforced on `email` within an organization (`409 conflict` on duplicates). `phone` is not required to be unique across contacts within the same organization — different trustees within a trustee group may share a phone number.
+- If a job omits all notification email fields, the fallback chain is: selected `contact_id`'s email → org default contact's email. See [Job notifications](#job-notifications).
+- Default lifecycle rules are shared across all saved-record types — see [Defaults: lifecycle rules](#defaults-lifecycle-rules).
+
+#### `GET /organizations/{organization_id}/contacts`
+
+List saved contacts. **Response `200 OK`:** `{ "contacts": [ /* contact objects */ ] }`
+
+#### `POST /organizations/{organization_id}/contacts`
+
+Create a saved contact. Request body: contact fields above (no `contact_id`). Setting `is_default: true` automatically clears the previous default. **Response `201 Created`:** the contact object.
+
+#### `GET /organizations/{organization_id}/contacts/{contact_id}`
+
+Retrieve one saved contact. **Response `200 OK`:** the contact object. `404 contact_not_found` if it doesn't exist.
+
+#### `PATCH /organizations/{organization_id}/contacts/{contact_id}`
+
+Update any subset of fields on one saved contact. Omitted fields are preserved. Setting `is_default: true` clears the previous default.
+
+#### `DELETE /organizations/{organization_id}/contacts/{contact_id}`
+
+Delete a saved contact. See [Deletion rules](#deletion-rules-for-saved-records). **Response `204 No Content`.**
+
+---
+
+### Organization Return Addresses
+
+**`[CHANGED 2026-07-14]`** *New section.* An organization may need **multiple return addresses**, and jobs may need to select a specific one rather than relying on a single global default. Each saved return address has a stable ID, a required label (`name`), and an optional default flag. The previous singular `settings.return_address` object is deprecated (see [Backward compatibility](#backward-compatibility)).
+
+**Return address resource:**
+
+```
+{
+  "return_address_id": "ra_123",
+  "name": "Default Trustee Address",
+  "is_default": true,
+  "address_name": "Nancy Hoffman, Trustee",
+  "firm_name": "Hoffman & Associates, PC",
+  "line1": "350 S Grand Ave, Suite 2200",
+  "line2": null,
+  "city": "Los Angeles",
+  "state": "CA",
+  "zip_code": "90071",
+  "country": "US",
+  "created_at": "2026-07-14T18:00:00Z",
+  "updated_at": "2026-07-14T18:00:00Z"
+}
+```
+
+| Field               | Type    | Required | Notes                                                          |
+| ------------------- | ------- | -------- | -------------------------------------------------------------- |
+| `return_address_id` | string  | —        | Generated by CoS                                               |
+| `name`              | string  | ✓        | Label for selection in partner UI; unique within the org       |
+| `is_default`        | boolean |          | At most one default per organization. Defaults to `false`.     |
+| `address_name`      | string  | one of   | Individual name, e.g. `"Nancy Hoffman, Trustee"`. At least one of `address_name` / `firm_name` is required. |
+| `firm_name`         | string  | one of   | Firm name                                                      |
+| `line1`             | string  | ✓        |                                                                |
+| `line2`             | string  |          |                                                                |
+| `city`              | string  | ✓        |                                                                |
+| `state`             | string  | ✓        | US state code                                                  |
+| `zip_code`          | string  | ✓        |                                                                |
+| `country`           | string  | ✓        | Must be `"US"` in v1                                           |
+
+**Limits:** max **25** saved return addresses per organization. `address_name`, `firm_name`, and `line1`/`line2` are limited to **40 characters** each to guarantee clean label output.
+
+#### `GET /organizations/{organization_id}/return-addresses`
+
+List saved return addresses. **Response `200 OK`:** `{ "return_addresses": [ /* objects */ ] }`
+
+#### `POST /organizations/{organization_id}/return-addresses`
+
+Create a saved return address. Setting `is_default: true` clears the previous default. **Response `201 Created`.**
+
+#### `GET /organizations/{organization_id}/return-addresses/{return_address_id}`
+
+Retrieve one saved return address. `404 return_address_not_found` if it doesn't exist.
+
+#### `PATCH /organizations/{organization_id}/return-addresses/{return_address_id}`
+
+Update any subset of fields. Omitted fields are preserved.
+
+#### `DELETE /organizations/{organization_id}/return-addresses/{return_address_id}`
+
+Delete a saved return address. See [Deletion rules](#deletion-rules-for-saved-records). **Response `204 No Content`.**
+
+---
+
+### Organization Signatures
+
+**`[CHANGED 2026-07-14]`** *New section.* Organizations can save **multiple certificate signatures** — the signatory role differs by case (Chapter 7 trustee, Chapter 11 trustee, attorney, trustee in possession, etc.) — and select one per job. The previous singular `settings.signature` object is deprecated (see [Backward compatibility](#backward-compatibility)).
+
+**Signature resource:**
+
+```
+{
+  "signature_id": "sig_123",
+  "name": "Chapter 13 Trustee",
+  "is_default": true,
+  "full_name": "Nancy Hoffman",
+  "bar_number": "123456",
+  "client_role": "Chapter 13 Trustee",
+  "firm_name": "Hoffman & Associates, PC",
+  "address_line1": "350 S Grand Ave, Suite 2200",
+  "address_line2": null,
+  "city": "Los Angeles",
+  "state": "CA",
+  "zip_code": "90071",
+  "phone": "213-555-0100",
+  "email": "nancy@hoffmanpc.com",
+  "fax": null,
+  "created_at": "2026-07-14T18:00:00Z",
+  "updated_at": "2026-07-14T18:00:00Z"
+}
+```
+
+| Field           | Type    | Required | Notes                                                          |
+| --------------- | ------- | -------- | -------------------------------------------------------------- |
+| `signature_id`  | string  | —        | Generated by CoS                                               |
+| `name`          | string  | ✓        | Label for selection in partner UI; unique within the org       |
+| `is_default`    | boolean |          | At most one default per organization. Defaults to `false`.     |
+| `full_name`     | string  | ✓        | Name of the signatory                                          |
+| `bar_number`    | string  | ✓        |                                                                |
+| `client_role`   | string  | ✓        | e.g. `"Chapter 13 Trustee"`, `"Attorney for Debtor"`           |
+| `firm_name`     | string  |          |                                                                |
+| `address_line1` | string  |          |                                                                |
+| `address_line2` | string  |          |                                                                |
+| `city`          | string  |          |                                                                |
+| `state`         | string  |          | US state code                                                  |
+| `zip_code`      | string  |          |                                                                |
+| `phone`         | string  |          |                                                                |
+| `email`         | string  |          |                                                                |
+| `fax`           | string  |          |                                                                |
+
+**Address inheritance.** When a signature's address fields are omitted, the signature block inherits the address from the return address resolved for that job (job override → referenced saved record → org default). If the signature has no embedded address **and** no return address can be resolved for the job, the job is rejected with `422 validation_error`.
+
+**Limits:** max **25** saved signatures per organization.
+
+#### `GET /organizations/{organization_id}/signatures`
+
+List saved signatures. **Response `200 OK`:** `{ "signatures": [ /* objects */ ] }`
+
+#### `POST /organizations/{organization_id}/signatures`
+
+Create a saved signature. Setting `is_default: true` clears the previous default. **Response `201 Created`.**
+
+#### `GET /organizations/{organization_id}/signatures/{signature_id}`
+
+Retrieve one saved signature. `404 signature_not_found` if it doesn't exist.
+
+#### `PATCH /organizations/{organization_id}/signatures/{signature_id}`
+
+Update any subset of fields. Omitted fields are preserved.
+
+#### `DELETE /organizations/{organization_id}/signatures/{signature_id}`
+
+Delete a saved signature. See [Deletion rules](#deletion-rules-for-saved-records). **Response `204 No Content`.**
+
+---
+
+### Defaults: lifecycle rules
+
+**`[CHANGED 2026-07-14]`** *New section.* These rules apply uniformly to contacts, return addresses, and signatures:
+
+- **Zero or one default** per resource type per organization. Attempting to create a second default in a single request without clearing the first returns `422 multiple_defaults_not_allowed` — but in practice this cannot occur, because:
+- **Setting a new default automatically clears the previous one.** Creating or patching a record with `is_default: true` demotes the prior default in the same operation.
+- **If no default exists** for a resource type, a job must either reference a saved record by ID or supply an inline override. A job that supplies neither is rejected with `422 default_required`.
+- **Deleting a default is allowed** and leaves the organization with no default for that type until another record is promoted. Future jobs must then explicitly specify a record or override until a new default is set.
+
+### Deletion rules for saved records
+
+**`[CHANGED 2026-07-14]`** *New section.*
+
+- **Non-default records** are always deletable.
+- **Default records** are deletable; the org is left with no default for that type (see above). To avoid a gap, promote another record (`PATCH ... is_default: true`) before or after the delete.
+- **Records referenced by drafts or submitted jobs** are safely deletable, because referenced records are **snapshotted onto the job at draft creation** (see [Job snapshot semantics](#job-snapshot-semantics)). Deleting a saved record never mutates or invalidates an existing draft or job.
+- The **last remaining contact** on an organization cannot be deleted (`422 validation_error`) — CoS requires at least one contact for account communication.
+
 ---
 
 ### Organization Settings
 
 Firm-level defaults applied to every job submitted by that organization unless overridden at the job level.
+
+**`[CHANGED 2026-07-14]`** Settings now carries only true org-level defaults: `default_court`, `order_preferences`, and read-only pointers to the current default saved records. The singular `return_address` and `signature` objects previously stored here are **deprecated** — they now surface the current default saved record for backward compatibility, and patching them updates that default record. New integrations should use the nested collection endpoints.
 
 ---
 
@@ -193,25 +417,12 @@ Firm-level defaults applied to every job submitted by that organization unless o
 
 **Response `200 OK`:**
 
-```json
+```
 {
   "organization_id": "org_a1b2c3",
-  "return_address": {
-    "address_name": "Nancy Hoffman, Trustee",
-    "firm_name": "Hoffman & Associates, PC",
-    "line1": "350 S Grand Ave, Suite 2200",
-    "line2": null,
-    "city": "Los Angeles",
-    "state": "CA",
-    "zip_code": "90071",
-    "country": "US"
-  },
-  "signature": {
-    "full_name": "Nancy Hoffman",
-    "bar_number": "123456",
-    "client_role": "Chapter 13 Trustee"
-    /* any optional address fields set on the org appear here */
-  },
+  "default_contact_id": "con_123",
+  "default_return_address_id": "ra_123",
+  "default_signature_id": "sig_123",
   "default_court": {
     "state": "CA",
     "district": "CACB",
@@ -222,24 +433,20 @@ Firm-level defaults applied to every job submitted by that organization unless o
     "format": "2up",
     "service": "normal",
     "mail_class": "first_class"
-  }
+  },
+  "return_address": { /* DEPRECATED — echo of the current default return address record */ },
+  "signature": { /* DEPRECATED — echo of the current default signature record */ }
 }
 ```
 
-**`return_address` field reference:**
-
-At least one of `address_name` or `firm_name` is required.
-
-| Field          | Type   | Required | Notes                                            |
-| -------------- | ------ | -------- | ------------------------------------------------ |
-| `address_name` | string | one of   | Individual name, e.g. `"Nancy Hoffman, Trustee"` |
-| `firm_name`    | string | one of   | Firm name                                        |
-| `line1`        | string | ✓        |                                                  |
-| `line2`        | string |          |                                                  |
-| `city`         | string | ✓        |                                                  |
-| `state`        | string | ✓        | US state code                                    |
-| `zip_code`     | string | ✓        |                                                  |
-| `country`      | string | ✓        | Must be `"US"` in v1                             |
+| Field                        | Type           | Notes                                                                                 |
+| ---------------------------- | -------------- | ------------------------------------------------------------------------------------- |
+| `default_contact_id`         | string \| null | Read-only pointer to the default contact. Manage via the contacts endpoints.          |
+| `default_return_address_id`  | string \| null | Read-only pointer to the default return address.                                      |
+| `default_signature_id`       | string \| null | Read-only pointer to the default signature.                                           |
+| `default_court`              | object         | `state`, `district`, optional `division`                                              |
+| `order_preferences`          | object         | See field reference below                                                             |
+| `return_address`, `signature`| object \| null | **Deprecated.** Legacy echo of the default saved records; `null` when no default set. |
 
 **`order_preferences` field reference:**
 
@@ -250,49 +457,18 @@ At least one of `address_name` or `firm_name` is required.
 | `service`    | string | `"normal"` \| `"rush"`                                   | Default: `"normal"`                                                                                                                    |
 | `mail_class` | string | `"first_class"` \| `"certified"` \| `"priority_express"` | Default: `"first_class"`. **`certified` and `priority_express` can only be set at the org settings or job level** — not per-recipient. |
 
-**`signature` field reference:**
-
-`full_name`, `bar_number`, and `client_role` are required. Address fields are optional — when omitted, the org's `return_address` is used on the signature block.
-
-| Field           | Type   | Required | Notes                                                |
-| --------------- | ------ | -------- | ---------------------------------------------------- |
-| `full_name`     | string | ✓        | Name of the signatory                                |
-| `bar_number`    | string | ✓        |                                                      |
-| `client_role`   | string | ✓        | e.g. `"Chapter 13 Trustee"`, `"Attorney for Debtor"` |
-| `firm_name`     | string |          |                                                      |
-| `address_line1` | string |          |                                                      |
-| `address_line2` | string |          |                                                      |
-| `city`          | string |          |                                                      |
-| `state`         | string |          | US state code                                        |
-| `zip_code`      | string |          |                                                      |
-| `phone`         | string |          |                                                      |
-| `email`         | string |          |                                                      |
-| `fax`           | string |          |                                                      |
-
 ---
 
 #### `PATCH /organizations/{organization_id}/settings`
 
 Update any subset of the organization's settings. Omitted fields are preserved.
 
+**`[CHANGED 2026-07-14]`** This endpoint no longer performs collection mutation. Sending the legacy singular `return_address` or `signature` object updates the **current default saved record** of that type (creating one if none exists). It cannot add additional records, delete records, or change which record is the default — use the nested resource endpoints (`POST` to create, `PATCH` to update one record, `DELETE` to remove one record).
+
 **Request body:**
 
-```json
+```
 {
-  "return_address": {
-    "address_name": "Nancy Hoffman, Trustee",
-    "firm_name": "Hoffman & Associates, PC",
-    "line1": "350 S Grand Ave, Suite 2200",
-    "city": "Los Angeles",
-    "state": "CA",
-    "zip_code": "90071",
-    "country": "US"
-  },
-  "signature": {
-    "full_name": "Nancy Hoffman",
-    "bar_number": "123456",
-    "client_role": "Chapter 13 Trustee"
-  },
   "default_court": {
     "state": "CA",
     "district": "CACB"
@@ -324,7 +500,7 @@ If a payment method is already on file, it will be replaced when the customer co
 
 **Request body:**
 
-```json
+```
 {
   "success_url": "https://your-app.com/billing/success",
   "cancel_url": "https://your-app.com/billing/cancel"
@@ -338,7 +514,7 @@ If a payment method is already on file, it will be replaced when the customer co
 
 **Response `200 OK`:**
 
-```json
+```
 {
   "organization_id": "org_a1b2c3",
   "setup_url": "https://checkout.stripe.com/c/pay/cs_live_...",
@@ -354,7 +530,7 @@ Check whether a valid payment method is on file. Only applicable to organization
 
 **Response `200 OK`:**
 
-```json
+```
 {
   "organization_id": "org_a1b2c3",
   "payment_configured": true,
@@ -374,7 +550,7 @@ If no payment method is configured, `payment_configured` will be `false` and `pa
 **Declined-payment semantics.** An organization with an unresolved declined payment is prevented from submitting new jobs until it clears the outstanding balance **and** supplies a new acceptable payment method. The platform tracks this state internally (job status `completed_payment_declined`, `order.payment_failed_at`, and admin notifications), so the partner API surfaces it here rather than introducing a separate endpoint:
 
 | Field                 | Type    | Notes                                                                                                                                                         |
-| --------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| --------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `payment_standing`    | string  | `"ok"` \| `"declined"` \| `"past_due"`. Reflects whether the org has an unresolved failed payment.                                                            |
 | `orders_blocked`      | boolean | `true` when submitting a job (`POST /jobs/mailings/{id}/submit`) will be rejected for payment reasons. Driven by `payment_standing` and `payment_configured`. |
 | `outstanding_balance` | object  | Amount that must be cleared before `orders_blocked` returns to `false`. `{ amount, currency }`.                                                               |
@@ -385,8 +561,7 @@ When `orders_blocked` is `true`, `POST /jobs/mailings/{id}/submit` returns `402 
 
 ### Terms of Service
 
-> Customers must formally accept the CoS Terms of Service before any mailing is sent. **Display is partner-managed** — the partner renders the ToS text (returned by `GET .../terms/status`) and the acceptance UX (checkbox, submit) inside their own product, then records the acceptance via the API. CoS does not host a redirect page for this. For partners not configured to require terms, `terms_required` is `false` and `terms_accepted` is always `true`.
-
+> Customers must formally accept the CoS Terms of Service before any mailing is sent. **Display is partner-managed** — the partner links to or renders the ToS (the canonical CoS-hosted `terms_url` is returned by `GET .../terms/status`) and presents the acceptance UX (e.g. a checkbox on first use) inside their own product, then records the acceptance via the API. **`[CHANGED 2026-07-14]`** The acceptance UX itself (link vs. embedded text, first-use checkbox vs. onboarding step) is a partner decision agreed during onboarding — the API contract only requires that an acceptance be recorded before the first submit while `terms_required` is `true`. For partners not configured to require terms, `terms_required` is `false` and `terms_accepted` is always `true`.
 ---
 
 #### `GET /organizations/{organization_id}/terms/status`
@@ -395,7 +570,7 @@ Check whether the organization has accepted the current Terms of Service. Mirror
 
 **Response `200 OK`:**
 
-```json
+```
 {
   "organization_id": "org_a1b2c3",
   "terms_required": true,
@@ -414,7 +589,7 @@ Check whether the organization has accepted the current Terms of Service. Mirror
 | `current_version`  | string         | Identifier of the ToS version currently in force.                                                     |
 | `accepted_version` | string \| null | Version the org last accepted, if any.                                                                |
 | `accepted_at`      | string \| null | ISO 8601 timestamp of acceptance.                                                                     |
-| `terms_url`        | string         | Canonical URL of the ToS text for the partner to display.                                             |
+| `terms_url`        | string         | Canonical CoS-hosted URL of the ToS for the partner to link to or display.                            |
 
 A new acceptance is required whenever `current_version` advances beyond `accepted_version`.
 
@@ -426,7 +601,7 @@ Record that the organization has accepted the current Terms of Service. The part
 
 **Request body:**
 
-```json
+```
 {
   "accepted_version": "2026-06-01",
   "accepted_by": "nancy@hoffmanpc.com",
@@ -460,6 +635,18 @@ Cancellation is only possible while the job is in `in_queue` status. Once a job 
 
 ---
 
+**`[CHANGED 2026-07-14]` Saved-record references, overrides, and precedence.** Jobs can now select the contact, return address, and signature three ways. For each of the three record types, resolution follows this precedence:
+
+1. **Inline override on the job** (`return_address`, `signature`, `notifications` objects) — highest precedence
+2. **Referenced saved record** (`contact_id`, `return_address_id`, `signature_id`)
+3. **Organization default** saved record
+
+If a job supplies both an ID reference and an inline object for the same type, the **inline object wins** and the ID is ignored. If a job supplies neither and the organization has no default for that type, draft creation is rejected with `422 default_required`.
+
+**`[CHANGED 2026-07-14]` Job snapshot semantics.** Any organization-level saved records referenced (or resolved via default) during draft creation are **materialized onto the draft at creation time**. Subsequent edits or deletions of organization-level records do **not** mutate existing drafts or submitted jobs. This preserves auditability and keeps deletes simple — a saved record can always be deleted without breaking in-flight work.
+
+---
+
 #### `POST /jobs/mailings`
 
 Create a new mailing job as a **draft** and return an itemized cost estimate. Documents are uploaded inline as part of this request using `multipart/form-data`. The job is **not** released for printing until you confirm it via `POST /jobs/mailings/{job_id}/submit`. For PACER-sourced jobs the PACER lookup runs at draft creation, so the estimate reflects the actual recipient list. A draft that is never submitted expires after 48 hours.
@@ -480,7 +667,7 @@ The request body is split into two parts: a JSON metadata field named `job` cont
 
 **`job` metadata field (JSON):**
 
-```json
+```
 {
   "organization_id": "org_a1b2c3",
   "type": "bankruptcy_notice",
@@ -497,6 +684,13 @@ The request body is split into two parts: a JSON metadata field named `job` cont
   "recipients": {
     "source": "pacer"
   },
+  "contact_id": "con_123",
+  "return_address_id": "ra_123",
+  "signature_id": "sig_123",
+  "notifications": {
+    "primary_email": "trustee@example.com",
+    "cc_emails": ["ops@example.com", "txi+123@veritatfs.com"]
+  },
   "order_preferences": {
     "sides": "double_sided",
     "format": "2up",
@@ -506,7 +700,10 @@ The request body is split into two parts: a JSON metadata field named `job` cont
   "external_reference": "case-10001-notice-q1",
   "bankruptcy_options": {
     "case_numbers": ["2:24-bk-10001"],
-    "court_location": { "state": "CA", "district": "CACB" }
+    "court_location": { "state": "CA", "district": "CACB", "division": "2" },
+    "debtor_name": "Acme Debtor LLC",
+    "chapter": "11",
+    "judge_name": "Hon. Jane Smith"
   }
 }
 ```
@@ -515,25 +712,29 @@ Each object in the `documents` array corresponds positionally to a file in the `
 
 **`job` field reference:**
 
-| Field                                 | Type   | Required                  | Notes                                                                                                                                                                            |
-| ------------------------------------- | ------ | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `organization_id`                     | string | ✓                         | Owning org                                                                                                                                                                       |
-| `type`                                | string | ✓                         | See job types below                                                                                                                                                              |
-| `documents`                           | array  | ✓                         | 1–15 document metadata objects. Array order is respected — documents print in the order listed. Each object maps positionally to a file in the `files` field.                    |
-| `documents[].docket_description`      | string |                           | Appears on the certificate of service for this document. Max 85 characters.                                                                                                      |
-| `documents[].docket_reference_number` | string |                           | Optional reference number for this document. Max 4 characters.                                                                                                                   |
-| `ballots`                             | array  |                           | Up to 1 ballot document metadata object. Maps positionally to `ballotFiles`.                                                                                                     |
-| `proofOfClaims`                       | array  |                           | Up to 1 proof of claim metadata object. Maps positionally to `proofOfClaimFiles`.                                                                                                |
-| `recipients.source`                   | string | ✓                         | `"pacer"` or `"user_supplied"`                                                                                                                                                   |
-| `recipients.addresses`                | array  | if source=user_supplied   | See recipient object below                                                                                                                                                       |
-| `order_preferences.sides`             | string |                           | `"double_sided"` (default) or `"one_sided"`                                                                                                                                      |
-| `order_preferences.format`            | string |                           | `"2up"` (default) or `"1up"`. `4up` is not yet supported.                                                                                                                        |
-| `order_preferences.service`           | string |                           | `"normal"` (default) or `"rush"`                                                                                                                                                 |
-| `order_preferences.mail_class`        | string |                           | `"first_class"` (default), `"certified"`, or `"priority_express"`. Overrides org default. `certified` and `priority_express` are only settable at the org settings or job level. |
-| `return_address`                      | object |                           | Overrides org default. Same shape as `return_address` in settings.                                                                                                               |
-| `signature`                           | object |                           | Overrides org default. See signature object below.                                                                                                                               |
-| `external_reference`                  | string |                           | Your reference ID; stored for your records                                                                                                                                       |
-| `bankruptcy_options`                  | object | if type=bankruptcy_notice | See bankruptcy options object below                                                                                                                                              |
+| Field                                 | Type   | Required                   | Notes                                                                                                                                                                            |
+| ------------------------------------- | ------ | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `organization_id`                     | string | ✓                          | Owning org                                                                                                                                                                       |
+| `type`                                | string | ✓                          | See job types below                                                                                                                                                              |
+| `documents`                           | array  | ✓                          | 1–15 document metadata objects. Array order is respected — documents print in the order listed. Each object maps positionally to a file in the `files` field.                    |
+| `documents[].docket_description`      | string |                            | Appears on the certificate of service for this document. Max 85 characters.                                                                                                      |
+| `documents[].docket_reference_number` | string |                            | Optional reference number for this document. Max 4 characters.                                                                                                                   |
+| `ballots`                             | array  |                            | Up to 1 ballot document metadata object. Maps positionally to `ballotFiles`.                                                                                                     |
+| `proofOfClaims`                       | array  |                            | Up to 1 proof of claim metadata object. Maps positionally to `proofOfClaimFiles`.                                                                                                |
+| `recipients.source`                   | string | ✓                          | `"pacer"` or `"user_supplied"`                                                                                                                                                   |
+| `recipients.addresses`                | array  | if source=user\_supplied   | See recipient object below                                                                                                                                                       |
+| `contact_id`                          | string |                            | `[CHANGED 2026-07-14]` Reference a saved org contact for this job's notifications. `404 contact_not_found` if unknown.                                                           |
+| `return_address_id`                   | string |                            | `[CHANGED 2026-07-14]` Reference a saved org return address. `404 return_address_not_found` if unknown. Ignored when an inline `return_address` is supplied.                     |
+| `signature_id`                        | string |                            | `[CHANGED 2026-07-14]` Reference a saved org signature. `404 signature_not_found` if unknown. Ignored when an inline `signature` is supplied.                                    |
+| `notifications`                       | object |                            | `[CHANGED 2026-07-14]` See job notifications below                                                                                                                              |
+| `order_preferences.sides`             | string |                            | `"double_sided"` (default) or `"one_sided"`                                                                                                                                      |
+| `order_preferences.format`            | string |                            | `"2up"` (default) or `"1up"`. `4up` is not yet supported.                                                                                                                        |
+| `order_preferences.service`           | string |                            | `"normal"` (default) or `"rush"`                                                                                                                                                 |
+| `order_preferences.mail_class`        | string |                            | `"first_class"` (default), `"certified"`, or `"priority_express"`. Overrides org default. `certified` and `priority_express` are only settable at the org settings or job level. |
+| `return_address`                      | object |                            | One-off inline override — highest precedence. Same shape as a saved return address (minus `return_address_id` / `name` / `is_default`).                                          |
+| `signature`                           | object |                            | One-off inline override — highest precedence. See signature object below.                                                                                                        |
+| `external_reference`                  | string |                            | Your reference ID; stored for your records                                                                                                                                       |
+| `bankruptcy_options`                  | object | if type=bankruptcy\_notice | See bankruptcy options object below                                                                                                                                              |
 
 **Job types (`type`):**
 
@@ -545,11 +746,11 @@ Each object in the `documents` array corresponds positionally to a file in the `
 
 Use `"pacer"` to pull the recipient list from PACER using the submitted court and case number. Use `"user_supplied"` to supply addresses directly.
 
-If PACER is unavailable or the case cannot be found, the job submission will return a `422` with code `pacer_error`.
+**`[CHANGED 2026-07-14]`** If the PACER/case lookup fails, draft creation returns a `422` with one of the specific case-resolution codes: `pacer_unavailable`, `case_not_found`, `case_ambiguous`, or `debtor_name_mismatch` (see [Errors](#errors)). The blanket `pacer_error` code is deprecated.
 
 **Recipient object (when `source = "user_supplied"`):**
 
-```json
+```
 "addresses": [
   {
     "name": "Bank of America NA",
@@ -561,17 +762,42 @@ If PACER is unavailable or the case cannot be found, the job submission will ret
 ]
 ```
 
+**Job notifications (`notifications`):** `[CHANGED 2026-07-14]` *New object.*
+
+```
+"notifications": {
+  "primary_email": "trustee@example.com",
+  "cc_emails": ["ops@example.com", "txi+123@veritatfs.com"]
+}
+```
+
+| Field           | Type   | Required | Notes                                                                    |
+| --------------- | ------ | -------- | ------------------------------------------------------------------------ |
+| `primary_email` | string |          | Receives **all** job lifecycle notifications (submission confirmation, completion, certificate delivery, cancellation/failure) plus billing issues. |
+| `cc_emails`     | array  |          | Up to **10** additional addresses. Receive **completion/certificate and failure** notifications only — not billing. Duplicates are deduped automatically. |
+
+**Fallback chain when `primary_email` is omitted:** the email of the job's referenced `contact_id` → the org's default contact email. If no address can be resolved, draft creation is rejected with `422 missing_contact_email`. An invalid email anywhere in the block rejects the request with `422 invalid_notification_email`; more than 10 CC addresses returns `422 too_many_cc_emails`.
+
+> **Phasing note:** the `notifications` contract is defined here so partners can build against it now; CC delivery (`cc_emails`) ships in the phase following MVP.
+
 **Bankruptcy options object (`bankruptcy_options`):**
 
-Required when `type` is `"bankruptcy_notice"`. Debtor name, joint debtor name, and case chapter are pulled automatically from PACER and do not need to be supplied.
+Required when `type` is `"bankruptcy_notice"`.
+
+**`[CHANGED 2026-07-14]`** `debtor_name`, `chapter`, and `judge_name` are now part of the request contract. Previously the draft stated that debtor name and chapter were pulled from PACER and did not need to be supplied; partners can now send them. `debtor_name` is treated as **advisory input validated against PACER** — supplying it lets CoS uniquely identify the correct case without prompting the user, and a material mismatch is rejected with `422 debtor_name_mismatch`. `chapter` and `judge_name` are **recorded and placed on the certificate**; CoS stores them as supplied and does not independently verify them in v1.
 
 | Field                     | Type   | Required | Notes                                                          |
 | ------------------------- | ------ | -------- | -------------------------------------------------------------- |
 | `case_numbers`            | array  | ✓        | One or more case number strings                                |
-| `court_location`          | object | ✓        | `state`, `district`, optional `division`                       |
+| `court_location`          | object | ✓        | `state`, `district`, optional `division`. The division code is critical for districts with multiple divisions. |
+| `debtor_name`             | string |          | `[CHANGED 2026-07-14]` Validated against the PACER-resolved case. Strongly recommended for PACER-sourced jobs — disambiguates when multiple cases match. |
+| `chapter`                 | string |          | `[CHANGED 2026-07-14]` e.g. `"7"`, `"11"`, `"13"`. Stored and shown on the certificate.  |
+| `judge_name`              | string |          | `[CHANGED 2026-07-14]` Stored and shown on the certificate.    |
 | `adversary_proceeding`    | object |          | All-or-nothing: omit entirely or supply all fields (see below) |
 | `return_envelope`         | object |          | See return envelope object below                               |
 | `certificate_preferences` | object |          | See certificate preferences object below                       |
+
+**Debtor-name comparison rules.** `[CHANGED 2026-07-14]` CoS normalizes case, whitespace, and punctuation before comparing the supplied `debtor_name` against the PACER-resolved debtor. Materially different names are rejected with `422 debtor_name_mismatch`, and the error payload includes both the provided and resolved names so the partner can surface an actionable message (see [Errors](#errors)).
 
 **Adversary proceeding object (`bankruptcy_options.adversary_proceeding`):**
 
@@ -609,7 +835,7 @@ All fields are required if the object is present. Omit the entire object if ther
 
 **Signature object (`signature`):**
 
-Overrides the org-level signature default for this job. `full_name`, `bar_number`, and `client_role` are required if the object is present. Address fields are optional — when omitted, they default to the org's `return_address`.
+One-off inline override for this job — takes precedence over `signature_id` and the org default. `full_name`, `bar_number`, and `client_role` are required if the object is present. Address fields are optional — when omitted, they inherit from the return address resolved for this job.
 
 | Field           | Type   | Required | Notes                                                |
 | --------------- | ------ | -------- | ---------------------------------------------------- |
@@ -626,15 +852,18 @@ Overrides the org-level signature default for this job. `full_name`, `bar_number
 | `email`         | string |          |                                                      |
 | `fax`           | string |          |                                                      |
 
-**Response `201 Created`:** The job is created in `draft` status with an itemized `cost_estimate`. Review it, then confirm with `POST /jobs/mailings/{job_id}/submit`.
+**Response `201 Created`:** The job is created in `draft` status with an itemized `cost_estimate`. Review it, then confirm with `POST /jobs/mailings/{job_id}/submit`. `[CHANGED 2026-07-14]` The response echoes `debtor_name`, `chapter`, and `judge_name` as stored/resolved by CoS so partners can reconcile them.
 
-```json
+```
 {
   "job_id": "job_z9y8x7",
   "organization_id": "org_a1b2c3",
   "status": "draft",
   "type": "bankruptcy_notice",
   "case_number": "2:24-bk-10001",
+  "debtor_name": "Acme Debtor LLC",
+  "chapter": "11",
+  "judge_name": "Hon. Jane Smith",
   "external_reference": "case-10001-notice-q1",
   "recipient_count": 47,
   "cost_estimate": {
@@ -659,7 +888,7 @@ Confirm a `draft` job and release it for printing. The job transitions `draft` �
 
 **Response `200 OK`:**
 
-```json
+```
 {
   "job_id": "job_z9y8x7",
   "status": "submitted",
@@ -673,15 +902,18 @@ Confirm a `draft` job and release it for printing. The job transitions `draft` �
 
 Get job status and details. **Poll this endpoint to track progress.**
 
-**Response `200 OK`:**
+**Response `200 OK`:** `[CHANGED 2026-07-14]` now includes `debtor_name`, `chapter`, and `judge_name` as stored by CoS.
 
-```json
+```
 {
   "job_id": "job_z9y8x7",
   "organization_id": "org_a1b2c3",
   "status": "completed",
   "type": "bankruptcy_notice",
   "case_number": "2:24-bk-10001",
+  "debtor_name": "Acme Debtor LLC",
+  "chapter": "11",
+  "judge_name": "Hon. Jane Smith",
   "external_reference": "case-10001-notice-q1",
   "recipient_count": 47,
   "certificate_ready": true,
@@ -737,10 +969,11 @@ List mailing jobs for an organization.
 
 **Response `200 OK`:**
 
-```json
+```
 {
   "mailings": [
-    /* array of job objects (same shape as GET /jobs/mailings/{id}) */
+    /* array of job objects (same shape as GET /jobs/mailings/{id}) —
+       includes debtor_name, chapter, judge_name [CHANGED 2026-07-14] */
   ],
   "pagination": {
     "page": 1,
@@ -758,7 +991,7 @@ Cancel a job. Only valid while the job is in `in_queue` status.
 
 **Response `200 OK`:**
 
-```json
+```
 {
   "job_id": "job_z9y8x7",
   "status": "cancelled"
@@ -779,7 +1012,7 @@ Download the certificate of service. Returns a signed URL that expires in 15 min
 
 **Response `200 OK`:**
 
-```json
+```
 {
   "job_id": "job_z9y8x7",
   "certificate_url": "https://certificates.certificateofservice.com/signed/...",
@@ -805,7 +1038,7 @@ Returns `null` for all fields until the job reaches `completed` status.
 
 **Response `200 OK`:**
 
-```json
+```
 {
   "job_id": "job_z9y8x7",
   "case_number": "2:24-bk-10001",
@@ -827,7 +1060,7 @@ Returns `null` for all fields until the job reaches `completed` status.
 
 All errors return a consistent envelope:
 
-```json
+```
 {
   "error": {
     "code": "validation_error",
@@ -847,15 +1080,144 @@ All errors return a consistent envelope:
 | 403  | `terms_not_accepted` | Org has not accepted the current Terms of Service; record acceptance via `POST .../terms/acceptance` first (applies only where `terms_required` is `true`).                                   |
 | 403  | `forbidden`          | Credential lacks scope for this action                                                                                                                                                        |
 | 404  | `not_found`          | Resource doesn't exist                                                                                                                                                                        |
-| 409  | `conflict`           | Duplicate `external_reference` (scoped per org) or non-unique phone number                                                                                                                    |
+| 404  | `contact_not_found`  | `[CHANGED 2026-07-14]` `contact_id` does not exist on this organization                                                                                                                       |
+| 404  | `return_address_not_found` | `[CHANGED 2026-07-14]` `return_address_id` does not exist on this organization                                                                                                          |
+| 404  | `signature_not_found` | `[CHANGED 2026-07-14]` `signature_id` does not exist on this organization                                                                                                                    |
+| 409  | `conflict`           | Duplicate `external_reference` (scoped per org), non-unique phone number, or duplicate contact email / record name within an org                                                              |
 | 422  | `validation_error`   | Input passes format checks but fails business logic                                                                                                                                           |
-| 422  | `pacer_error`        | PACER unavailable or case not found — job not created                                                                                                                                         |
+| 422  | `default_required`   | `[CHANGED 2026-07-14]` Job supplied neither an inline override nor a saved-record reference, and the org has no default for that record type                                                  |
+| 422  | `multiple_defaults_not_allowed` | `[CHANGED 2026-07-14]` Request would result in more than one default record of a type                                                                                              |
+| 422  | `cannot_delete_default_without_replacement` | `[CHANGED 2026-07-14]` Reserved — returned only if the partner is configured to require an always-present default                                                      |
+| 422  | `invalid_notification_email` | `[CHANGED 2026-07-14]` A `notifications` email failed format validation                                                                                                               |
+| 422  | `too_many_cc_emails` | `[CHANGED 2026-07-14]` `notifications.cc_emails` exceeds the maximum of 10                                                                                                                    |
+| 422  | `missing_contact_email` | `[CHANGED 2026-07-14]` No notification email could be resolved (no `primary_email`, no contact email, no org default contact)                                                              |
+| 422  | `pacer_unavailable`  | `[CHANGED 2026-07-14]` PACER or the related lookup service is unavailable — job not created; retry later                                                                                      |
+| 422  | `case_not_found`     | `[CHANGED 2026-07-14]` No case found for the supplied case number / court location                                                                                                            |
+| 422  | `case_ambiguous`     | `[CHANGED 2026-07-14]` Multiple possible cases matched — supply `court_location.division` and/or `debtor_name` to disambiguate                                                                |
+| 422  | `debtor_name_mismatch` | `[CHANGED 2026-07-14]` Supplied `debtor_name` did not match the PACER-resolved case (see example below)                                                                                     |
+| 422  | ~~`pacer_error`~~    | **Deprecated** `[CHANGED 2026-07-14]` — replaced by the four case-resolution codes above                                                                                                      |
 | 429  | `rate_limited`       | Too many requests — see `Retry-After` header                                                                                                                                                  |
 | 500  | `internal_error`     | CoS-side error                                                                                                                                                                                |
+
+**Example — `debtor_name_mismatch`:** `[CHANGED 2026-07-14]`
+
+```
+{
+  "error": {
+    "code": "debtor_name_mismatch",
+    "message": "The debtor name provided does not match the case number resolved through PACER.",
+    "job_id": null,
+    "details": {
+      "provided_debtor_name": "Acme Debtor LLC",
+      "resolved_debtor_name": "Acme Debtor Liquidation LLC",
+      "case_number": "2:24-bk-10001"
+    }
+  }
+}
+```
+
+**Example — `case_ambiguous`:** `[CHANGED 2026-07-14]`
+
+```
+{
+  "error": {
+    "code": "case_ambiguous",
+    "message": "Multiple cases matched '24-10001' in district CACB. Supply court_location.division and/or debtor_name to disambiguate.",
+    "job_id": null,
+    "details": {
+      "case_number": "24-10001",
+      "candidates": [
+        { "case_number": "2:24-bk-10001", "debtor_name": "Acme Debtor LLC" },
+        { "case_number": "6:24-bk-10001", "debtor_name": "Bravo Holdings Inc" }
+      ]
+    }
+  }
+}
+```
+
+**Example — `default_required`:** `[CHANGED 2026-07-14]`
+
+```
+{
+  "error": {
+    "code": "default_required",
+    "message": "No signature was supplied and the organization has no default signature. Reference a saved signature_id, supply an inline signature, or set a default.",
+    "job_id": null
+  }
+}
+```
+
+---
+
+## Backward compatibility
+
+**`[CHANGED 2026-07-14]`** *New section.* v1 supports both the legacy singular forms and the new collections during the transition:
+
+| Legacy field | Status | Behavior |
+| --- | --- | --- |
+| `contact_email` (org) | Deprecated | Legacy shorthand for the **default contact's email**. Reading returns the default contact's email; writing updates it. |
+| `company_phone_number` (org) | Deprecated | Legacy shorthand for the **default contact's phone**. Uniqueness across organizations still enforced. |
+| `settings.return_address` (singular) | Deprecated | Echoes / updates the **default saved return address**. Cannot add, delete, or re-default records. |
+| `settings.signature` (singular) | Deprecated | Echoes / updates the **default saved signature**. Cannot add, delete, or re-default records. |
+| Inline `return_address` / `signature` on jobs | **Supported (not deprecated)** | Remain valid as one-off, highest-precedence overrides. |
+| `pacer_error` | Deprecated | Replaced by `pacer_unavailable`, `case_not_found`, `case_ambiguous`, `debtor_name_mismatch`. Partners should handle the specific codes; the blanket code will be removed after the transition window. |
+
+Deprecated fields will continue to work until partner integrations have migrated; removal will be announced with a version bump and transition window.
 
 ---
 
 ## Changelog
+
+### 2026-07-14
+
+> Incorporates the amendments agreed in the 2026-07-14 CoS ↔ Verita working session.
+
+**Organizations — reusable saved-record collections** *(new sections)*
+
+- Added **Organization Contacts**: organizations can now store multiple contacts (different trustees/users within a trustee group may need different phone/email values), with at most one default. Nested CRUD endpoints at `/organizations/{id}/contacts`.
+- Added **Organization Return Addresses**: multiple named return addresses per org with a stable `return_address_id`, a required `name` label, and at most one default. Nested CRUD endpoints at `/organizations/{id}/return-addresses`.
+- Added **Organization Signatures**: multiple named certificate signatures per org (roles differ by case — Chapter 7 trustee, Chapter 11 trustee, attorney, trustee in possession, etc.), with at most one default. Nested CRUD endpoints at `/organizations/{id}/signatures`.
+- Documented **default lifecycle rules** (zero-or-one default per type; setting a new default clears the previous one; jobs with no resolvable record are rejected with `default_required`) and **deletion rules** (defaults deletable; snapshotting makes deletes safe for in-flight jobs; last contact not deletable).
+- `contact_email` and `company_phone_number` on the organization are now documented as **legacy shorthand for the default contact** and marked deprecated. Phone uniqueness across organizations is unchanged; contacts within one organization may share a phone number.
+
+**Organization Settings — narrowed scope**
+
+- `settings` now carries only true settings: `default_court`, `order_preferences`, and read-only default pointers (`default_contact_id`, `default_return_address_id`, `default_signature_id`).
+- The singular `return_address` and `signature` objects in settings are deprecated. `PATCH .../settings` no longer performs collection mutation — the legacy singular objects update only the current default record. Add/update/delete of individual records goes through the nested resource endpoints (`POST` / `PATCH` / `DELETE`).
+
+**Jobs — saved-record references, overrides, and precedence**
+
+- Added `contact_id`, `return_address_id`, and `signature_id` to the job payload for referencing saved org records.
+- Inline `return_address` and `signature` remain supported as one-off overrides.
+- Documented explicit precedence: **inline override → referenced saved record → organization default**; jobs resolving to none are rejected with `default_required`.
+- Documented **snapshot semantics**: referenced/default records are materialized onto the draft at creation time; later edits or deletions of org-level records never mutate existing drafts or submitted jobs.
+
+**Jobs — notifications block** *(new)*
+
+- Added `notifications.primary_email` (all job lifecycle notifications + certificate + billing) and `notifications.cc_emails` (up to 10; completion/certificate and failure notifications only).
+- Documented the fallback chain when `primary_email` is omitted: referenced contact's email → org default contact email; otherwise `missing_contact_email`.
+- CC delivery is defined in the contract now and ships in the phase following MVP.
+
+**Bankruptcy metadata**
+
+- Added `debtor_name`, `chapter`, and `judge_name` to `bankruptcy_options`. `debtor_name` is validated against the PACER-resolved case (normalized for case, whitespace, and punctuation) and reduces case ambiguity so users aren't prompted; `chapter` and `judge_name` are stored and placed on the certificate.
+- `debtor_name`, `chapter`, and `judge_name` are echoed back on `POST /jobs/mailings`, `GET /jobs/mailings/{id}`, and `GET /jobs/mailings` responses so partners can reconcile what CoS stored/used.
+
+**Errors**
+
+- Split the blanket `pacer_error` into `pacer_unavailable`, `case_not_found`, `case_ambiguous`, and `debtor_name_mismatch` (deprecating `pacer_error`).
+- Added saved-record errors (`contact_not_found`, `return_address_not_found`, `signature_not_found`), default-management errors (`default_required`, `multiple_defaults_not_allowed`, `cannot_delete_default_without_replacement`), and notification errors (`invalid_notification_email`, `too_many_cc_emails`, `missing_contact_email`).
+- Added worked examples for `debtor_name_mismatch`, `case_ambiguous`, and `default_required`.
+
+**Terms of Service**
+
+- Softened the display prose: the partner may link out to the canonical CoS-hosted ToS URL or render the text; the acceptance UX (e.g. first-use checkbox) is a partner decision agreed during onboarding. The API contract only requires that acceptance be recorded before first submit where `terms_required` is `true`.
+
+**Backward compatibility** *(new section)*
+
+- Added a table covering the deprecation status and transition behavior of `contact_email`, `company_phone_number`, singular `settings.return_address` / `settings.signature`, inline job overrides (retained), and `pacer_error`.
+
+---
 
 ### 2026-07-08
 
@@ -879,9 +1241,9 @@ All errors return a consistent envelope:
 **Jobs — cancellation and timing**
 
 - Added a **Job timing and cancellation windows** section describing when jobs lock in for printing and when cancellation is permitted:
-  - Normal service pre-noon and rush service jobs lock in 15 minutes after submission.
-  - Deferred jobs (normal service, submitted post-noon) lock in at 4:00 PM PST on the day of submission.
-  - Cancellation is only available while the job is in `in_queue` status.
+  * Normal service pre-noon and rush service jobs lock in 15 minutes after submission.
+  * Deferred jobs (normal service, submitted post-noon) lock in at 4:00 PM PST on the day of submission.
+  * Cancellation is only available while the job is in `in_queue` status.
 
 **Billing**
 
@@ -914,7 +1276,7 @@ All errors return a consistent envelope:
 - Added `outstanding_balance` field to `GET .../billing/status`.
 - When `orders_blocked` is `true`, `POST /jobs/mailings/{id}/submit` returns `402 payment_required`. Draft creation and estimation are still permitted.
 
-**Terms of Service** _(new section)_
+**Terms of Service** *(new section)*
 
 - Added `GET /organizations/{id}/terms/status` — check whether the org has accepted the current Terms of Service.
 - Added `POST /organizations/{id}/terms/acceptance` — record acceptance after the partner's customer completes the acceptance flow in the partner UI.
