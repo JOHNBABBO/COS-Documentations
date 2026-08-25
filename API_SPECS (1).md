@@ -888,9 +888,11 @@ One-off inline override for this job — takes precedence over `signature_id` an
   "cost_estimate": {
     "document_processing": 0.0,
     "usps_postage": 32.17,
-    "per_notice_fee": 8.46,
+    "CM_ECF_Fees": 0.30,
     "subtotal": 40.63,
+    "print_credits": 0.0,
     "sales_tax": 0.0,
+    "convenience_fee": 0.0,
     "total": 40.63,
     "currency": "USD"
   },
@@ -939,9 +941,11 @@ Get job status and details. **Poll this endpoint to track progress.**
   "cost": {
     "document_processing": 0.0,
     "usps_postage": 32.17,
-    "per_notice_fee": 8.46,
+    "CM_ECF_Fees": 0.30,
     "subtotal": 40.63,
+    "print_credits": 0.0,
     "sales_tax": 0.0,
+    "convenience_fee": 0.0,
     "total": 40.63,
     "currency": "USD"
   },
@@ -1064,10 +1068,12 @@ Returns `null` for all fields until the job reaches `completed` status.
   "recipient_count": 47,
   "document_processing": 0.0,
   "usps_postage": 32.17,
-  "per_notice_fee": 8.46,
+  "CM_ECF_Fees": 0.30,
   "per_notice_rate": 0.18,
   "subtotal": 40.63,
+  "print_credits": 0.0,
   "sales_tax": 0.0,
+  "convenience_fee": 0.0,
   "total": 40.63,
   "currency": "USD"
 }
