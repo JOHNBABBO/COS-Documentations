@@ -14,7 +14,7 @@ Note that this differs from the production base URL documented in the specificat
 
 **Authentication.** Every request requires an `Authorization: Bearer <api-key>` header. See the specification for header format and error responses.
 
-**Getting your key.** API keys are issued by CoS per integration partner, not per customer account. Request one from Christian. [TK — how the key will be delivered.] Keys are not created or retrieved through the API, and a key is shown only once at the time it is issued, so store it securely on receipt.
+**Getting your key.** API keys are issued by CoS. We will share API keys with partners directly. Keys are not created or retrieved through the API, and a key is shown only once at the time it is issued, so store it securely on receipt.
 
 **Key rotation.** Rotation is handled by CoS on request. Contact us and we will issue a new key; your existing key continues to authenticate for a transition window, so there is no interruption while you cut over. Please tell us the window you need when you make the request. There is no partner-facing endpoint for this.
 
@@ -79,5 +79,3 @@ Please do not build test coverage against these yet. We will update this documen
 **IP allowlists and per-credential scopes.** These appear in the current specification but are not implemented and are not planned. Please disregard those sections; a corrected specification will follow.
 
 ---
-
-Questions on scope or availability: Christian. Questions on request or response shape: check the API specification first, and reach out if anything there is unclear.
