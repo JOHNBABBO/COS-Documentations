@@ -1051,7 +1051,7 @@ Returns `404` if the certificate is not yet ready (check `certificate_ready` on 
 
 ### Job Cost Breakdown
 
-Detailed per-recipient cost data for billing passthrough. Chapter 13 trustees use this to populate the Trustee's Final Report (actual postage + $0.18/notice federal allowance).
+Detailed per-recipient cost data for billing passthrough. Chapter 13 trustees use this to populate the Trustee's Final Report.
 
 ---
 
