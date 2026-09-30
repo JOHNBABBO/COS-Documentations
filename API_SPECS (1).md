@@ -1069,7 +1069,6 @@ Returns `null` for all fields until the job reaches `completed` status.
   "document_processing": 0.0,
   "usps_postage": 32.17,
   "CM_ECF_Fees": 0.30,
-  "per_notice_rate": 0.18,
   "subtotal": 40.63,
   "print_credits": 0.0,
   "sales_tax": 0.0,
