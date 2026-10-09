@@ -129,16 +129,16 @@ Provision a new organization.
 
 ```
 {
-  "organization_id": "org_a1b2c3",
+  "organization_id": "7780303033",
   "name": "Hoffman & Associates, PC",
   "external_id": "tfs-firm-4821",
   "contact": {
-    "contact_id": "con_123",
-    "name": "Nancy Hoffman",
+    "contact_id": 366,
+    "is_default": true,
     "email": "billing@hoffmanpc.com",
+    "name": "Nancy Hoffman",
     "phone": "213-555-0100",
-    "role": "admin",
-    "is_default": true
+    "role": "admin"
   },
   "address": {
     "line1": "350 S Grand Ave, Suite 2200",
@@ -152,13 +152,35 @@ Provision a new organization.
 }
 ```
 
+> **IDs are integers.** `organization_id` is returned as a numeric string; `contact_id` (and every other saved-record ID — `return_address_id`, `signature_id`) is a plain integer. The embedded `contact` in this create response carries no `created_at` / `updated_at`.
+
 ---
 
 #### `GET /organizations/{organization_id}`
 
 Retrieve an organization by ID. Scoped to the authenticating partner — returns `404 not_found` if the org belongs to another partner.
 
-**Response `200 OK`:** same shape as `POST /organizations` response.
+**Response `200 OK`:**
+
+```
+{
+  "organization_id": "7780303033",
+  "name": "Hoffman & Associates, PC",
+  "type": "Consumer Bankruptcy",
+  "address": {
+    "line1": "350 S Grand Ave, Suite 2200",
+    "city": "Los Angeles",
+    "state": "CA",
+    "zip_code": "90071",
+    "country": "US"
+  },
+  "phone": "2135550119",
+  "created_at": "2026-05-26T18:00:00Z",
+  "updated_at": "2026-05-26T18:00:00Z"
+}
+```
+
+> **The GET response shape differs from the create response.** `GET /organizations/{id}` returns `type` and a top-level `phone`, plus `updated_at`, and does **not** include `external_id` or the embedded `contact` object that `POST /organizations` returns. To read an organization's contact(s), use `GET /organizations/{id}/contacts`. (`line2` is omitted when null.)
 
 ---
 

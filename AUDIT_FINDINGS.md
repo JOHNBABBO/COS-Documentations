@@ -149,3 +149,94 @@ Live:
 ## Blocked / still needed for full Option B lifecycle
 - To reach `submitted → completed` (and test certificate + final `cost` actuals), the payment gate must be cleared: either complete the Stripe `setup_url` in a browser, or use an org/partner that already has `payment_configured:true`. Submit cannot succeed while `orders_blocked:true`.
 - `termsRequired:true` partner needed to test the terms 200 path and `403 terms_not_accepted` on submit.
+
+
+---
+
+# Config matrix findings (partners id13/14/15 created via admin API)
+
+Partners created for the matrix (orgs provisioned under each):
+- id13 "Audit stripe terms" — stripe / termsRequired=true — org 8509846406
+- id14 "Audit invoice terms" — monthly_invoice / termsRequired=true — org 7493310928
+- id15 "Audit invoice noterms" — monthly_invoice / termsRequired=false — org 3168683619
+
+## POST /organizations (now audited)
+- 🟢 `201` on all three. Response **includes `external_id` and embedded `contact` object** (with integer `contact_id`).
+- 🔴 **POST vs GET response inconsistency:** the `POST /organizations` response contains `external_id` + `contact`, but `GET /organizations/{id}` (tested earlier on org 7780303033) **omits both** and instead adds `type` + top-level `phone`. The two representations of the same resource disagree. Spec shows one unified shape.
+- 🟡 Loose validation: accepted `phone:"213-555-131"` (not a valid phone) without error. Spec implies phone uniqueness/format matters for account matching.
+- Embedded contact in POST response has no `created_at`/`updated_at` (standalone contacts list does).
+
+## Billing matrix — 🟢 matches spec exactly
+- stripe partner (id13): `GET billing/status` → 200; `POST billing/setup` → 200 (Stripe `cs_test_` URL).
+- monthly_invoice partners (id14, id15): `GET billing/status` → **403 forbidden** ("Billing status is not available for monthly-invoiced organizations"); `POST billing/setup` → **403 forbidden**. Matches spec's "billing/* returns 403 for monthly-invoiced orgs".
+
+## Terms matrix
+- 🟢 termsRequired=true (id13, id14): `terms_required:true, terms_accepted:false, current_version:"Test"`; `POST terms/setup` → **200** with `acceptance_url`, `terms_version:"Test"`, `expires_at` (~24h). This is the 200 path previously blocked.
+- 🟢 termsRequired=false (id15): `terms_required:false, terms_accepted:true`; `POST terms/setup` → **403** ("Terms setup is not applicable…").
+- 🔴 **`acceptance_url` token format differs from spec.** Spec example: `.../terms/accept/ts_live_...`. Live: `https://backend.staging.thenoticingcenter.com/terms/accept/<64-char hex>` (no `ts_live_` prefix). Host differs (staging, expected); token style does not match doc.
+- 🟡 Earlier observation corrected: `terms_url`/`current_version` are populated when terms are required (null only when not required). Not a bug.
+- Note: monthly_invoice + termsRequired=true (id14) is a valid combo — terms gate applies independently of billing mode, consistent with spec's onboarding-gate definition.
+
+## Error-envelope consistency note
+- Admin API (`/partners`) uses a DIFFERENT error shape: `{ "message": "...", "errorStack": [...] }` (e.g. partner name validation). The Partner API uses `{ "error": { code, message, job_id } }`. Only the Partner API envelope is in-scope for the spec, but worth noting they differ.
+
+
+---
+
+# Full lifecycle findings (paid org 7780303033, card 4242 on file)
+
+## Payment method populated shape
+- 🟢 `GET billing/status` with card: `payment_method: { type:"card", last4:"4242", brand:"visa", is_default:true }`, `orders_blocked:false`. Matches spec + extra `is_default` field (undocumented).
+
+## Submit (POST /jobs/mailings/{id}/submit)
+- 🔴 **Response status is `in_queue`, not `submitted`.** Spec example shows `{"status":"submitted"}`; live returns `{"job_id","status":"in_queue","created_at"}`. The job skips a distinct `submitted` state (or the response reports the next state directly).
+- 🟢 Gate works: with payment configured, submit succeeds (`200`).
+
+## default_required on draft
+- 🟢 Confirmed `422 default_required` when org has no default return address and none supplied inline/by-id. Error payload includes `details.field: "return_address"`. Matches spec precedence rules. (The very first draft succeeded only because defaults existed at that moment.)
+
+## Draft creation variants
+- 🟡 **Intermittent `500 internal_error` on draft creation** — the exact same payload that 500'd returned `201` on retry seconds later. Flaky server-side error; not payload-related. Not documented.
+- 🔵 **`convenience_fee` becomes non-zero once a card is on file** (Stripe fee): `0` pre-card, `1.01`–`1.11` with card. Depends on payment type. Spec does not explain `convenience_fee` drivers.
+- 🔵 **user_supplied recipients → `cost_estimate: null`** at draft time (only PACER jobs get an estimate at draft). `recipient_count` reflects supplied addresses. Not documented.
+
+## Polling / completion
+- 🟡 **Staging does not auto-advance jobs.** After submit, job stays `in_queue` indefinitely (polled 120s, no change). Reaching `completed` requires CoS to advance it manually (consistent with status-doc note "submitted jobs cannot be polled; we'll confirm directly"). So `completed`-state fields (`mailed_at`, final `cost` actuals, `certificate_ready:true`) could NOT be verified live.
+
+## Certificate (CORRECTION to earlier finding)
+- 🟢 **`GET .../certificate` IS implemented.** On a non-completed job it returns the JSON envelope `404 {"error":{"code":"not_found","message":"Certificate not found"}}` — matching spec's "404 if not yet ready." (Earlier I saw an Express HTML `Cannot GET`; that was a transient/mistaken read. Re-verified: route is mounted and returns the proper envelope.)
+- 🟡 The 200 certificate response (signed URL shape) still unverified because no job reached `completed`.
+
+## Cost endpoint
+- 🔴 `GET .../cost` omits `job_id`, `case_number`, `recipient_count` that the spec's cost object shows at top level.
+- 🟡 `per_notice_rate` appears inconsistently in cost objects (present in some responses, absent in others).
+- Pre-completion returns all-null fields + `currency` (matches spec intent).
+
+
+---
+
+# Error-code sweep findings
+
+## Auth — 🟢
+- Bad key, missing header, malformed header → all `401 unauthorized` with correct envelope `{error:{code,message,job_id}}`.
+
+## Not found (404)
+- 🟢 `return_address_not_found` and `signature_not_found` returned with the specific code at the **top level** — matches spec.
+- 🔴 **`contact_not_found` is inconsistent.** Top-level `code` is `"not_found"` and the specific `"contact_not_found"` is nested in `details.code`. The other two collections put the specific code at top level. Spec lists `contact_not_found` as a top-level code like the others. Fix either the API or document the discrepancy.
+
+## Job validation — 🟢 (all match documented codes)
+- Missing `case_numbers` → `422 validation_error`.
+- Invalid primary email → `422 invalid_notification_email`.
+- 11 CC emails → `422 too_many_cc_emails` (message includes count).
+- Bad `return_address_id` in job → `404 return_address_not_found`.
+- Wrong `debtor_name` → `422 debtor_name_mismatch` — **`details` payload exactly matches spec example** (`provided_debtor_name`, `resolved_debtor_name`, `case_number`).
+- Bogus case number → `422 case_not_found`.
+
+## Conflict (409)
+- 🟢 Duplicate contact email → `409 conflict` with `details:{field:"email",code:"contact_email_conflict"}`. Matches spec.
+- 🔴🔴 **Duplicate `external_id` is NOT enforced.** Created two orgs with identical `external_id:"audit-dup-eid"` — BOTH returned `201` (orgs 1870059062 and 8104092438). Spec says this must return `409 conflict` ("Duplicate external_id, scoped per org"). This is a real backend gap: `external_id` uniqueness is not enforced, which breaks partner lookup-by-external_id. Either fix the API or remove the uniqueness claim from the spec (recommend fix; flag to backend team).
+
+## Not tested
+- `413 payload_too_large` (would require pushing >100MB; skipped intentionally — mark unverified).
+- `429 rate_limited`, `500 internal_error` (observed a transient 500 earlier; not deliberately reproducible).
+- `403 terms_not_accepted` on submit (would need a termsRequired org with payment configured but terms unaccepted — the terms-required partners have no payment method, so submit hits the payment gate first).
