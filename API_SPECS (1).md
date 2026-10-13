@@ -1226,6 +1226,53 @@ All errors return a consistent envelope:
 
 ## Changelog
 
+### 2026-10-09
+
+> **COS-26091** — Reconciled the spec with the **live staging implementation** (`backend.staging.thenoticingcenter.com/v1/cos`). These are corrections to match observed behavior, not new design decisions. All four partner billing/terms configurations and the job lifecycle were exercised against staging.
+
+**Organizations**
+
+- IDs are **integers**, not strings — `contact_id`, `return_address_id`, `signature_id`, and the settings `default_*_id` pointers (examples updated from `con_123`/`ra_123`/`sig_123`).
+- Documented that `POST /organizations` and `GET /organizations/{id}` return **different shapes**: the create response includes `external_id` + embedded `contact`; the GET response omits both and instead returns `type`, a top-level `phone`, and `updated_at`.
+- Marked `GET /organizations` (list) as **not implemented** (route not mounted — returns `404 Cannot GET`).
+
+**Saved-record collections**
+
+- Corrected list-response wrappers: `contacts` returns `{ contacts: [...] }`, while `return-addresses` and `signatures` wrap with a top-level `organization_id`.
+- Signatures: `firm_name`, `address_line2`, `email`, and `fax` are **accepted on write but not returned** in the response.
+
+**Settings**
+
+- `default_court.state` / `default_court.district` require **full names** (`"California"`, `"Central"`), not codes (`"CA"`, `"CACB"`); codes return `400 invalid_request`. Same rule for job `court_location`.
+
+**Terms**
+
+- `terms/setup` `acceptance_url` uses an opaque hex token (no `ts_live_` prefix).
+
+**Billing**
+
+- `billing/status` `payment_method` includes an `is_default` boolean; monetary amounts are plain numbers (e.g. `0`).
+- Documented a known misleading-message quirk on the `402 payment_required` submit rejection when no payment method is on file (gate on `orders_blocked`/`payment_configured`, not the message text).
+
+**Jobs**
+
+- `POST /jobs/mailings/{id}/submit` response status is **`in_queue`**, not `submitted`.
+- Draft response includes `document_count`; `convenience_fee` is non-zero when the org pays by card; `per_notice_rate` appears inconsistently; `expires_at` is not returned.
+- `GET /jobs/mailings/{id}` returns **both** `cost_estimate` and `cost` (`cost` is `null` until completed).
+- `GET .../cost` omits `job_id`, `case_number`, `recipient_count`.
+- For PACER-sourced jobs, `debtor_name`, `chapter`, and `judge_name` are resolved from PACER and echoed back even when not supplied; `user_supplied` recipients yield a `null` draft estimate.
+- Certificate endpoint verified to return the `404 not_found` envelope when not ready; the `200` signed-URL shape remains unverified (staging did not advance jobs to `completed`).
+
+**Errors**
+
+- `409 conflict`: **`external_id` uniqueness is not currently enforced** on organizations (duplicates return `201`) — flagged as a backend gap, not just a doc note.
+- `contact_not_found` returns its specific code nested under `details.code` (top-level `code` is `not_found`), unlike `return_address_not_found` / `signature_not_found`.
+- `403 forbidden`: documented the verified billing/terms-config meanings; noted that per-credential **scopes are not implemented**.
+
+**Authentication**
+
+- Marked **IP allowlists** and **per-credential scopes** as **not implemented** (consistent with the integration-status note).
+
 ### 2026-07-14
 
 > Incorporates the amendments agreed in the 2026-07-14 CoS ↔ Verita working session.
