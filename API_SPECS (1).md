@@ -1117,7 +1117,14 @@ The certificate of service PDF is generated when the job completes. It is stored
 
 Download the certificate of service.
 
-**Response `200 OK`:** `[CHANGED — verified live]` Returns the **certificate PDF directly** as the response body (`Content-Type: application/pdf`), **not** a JSON object with a signed URL. Earlier drafts of this spec described a JSON response with `certificate_url` / `url_expires_at` / `generated_at` / `stored_until`; the live endpoint instead streams the PDF bytes. Clients should handle the response as a file download, not JSON.
+**Response `200 OK`:** `[CHANGED — verified live]` Returns the **certificate PDF directly** as the response body — **not** a JSON object with a signed URL. Response headers:
+
+```
+Content-Type: application/pdf
+Content-Disposition: inline; filename="certificate_of_service_<job_id>.pdf"
+```
+
+Earlier drafts of this spec described a JSON response with `certificate_url` / `url_expires_at` / `generated_at` / `stored_until`; the live endpoint instead streams the PDF bytes (verified: `200`, `application/pdf`, ~1.5 MB body beginning with `%PDF`). Clients should handle the response as a file download, not JSON.
 
 Returns `404` if the certificate is not yet ready (check `certificate_ready` on `GET /jobs/mailings/{job_id}` first) or if the 90-day retention window has passed. Verified live: on a non-completed job this returns the JSON error envelope `404 {"error":{"code":"not_found","message":"Certificate not found"}}`; on a `completed` job it returns `200` with the PDF.
 
