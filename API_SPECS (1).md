@@ -1003,8 +1003,39 @@ Example below shows an in-progress (`printing`) job. The response carries **both
 }
 ```
 
+Once the job reaches `completed` (verified live), `cost` is populated, `certificate_ready` becomes `true`, and `mailed_at` is set:
+
+```
+{
+  "job_id": "0000000459",
+  "organization_id": "7780303033",
+  "status": "completed",
+  "type": "bankruptcy_notice",
+  "case_number": "20-bk-01701",
+  "debtor_name": "Shalonda Megail Jennings",
+  "chapter": "13",
+  "judge_name": "Katharine M. Samson",
+  "recipient_count": 46,
+  "certificate_ready": true,
+  "cost_estimate": { "...": "same breakdown as above" },
+  "cost": {
+    "document_processing": 5.95,
+    "usps_postage": 27.3,
+    "CM_ECF_Fees": 0.3,
+    "subtotal": 33.55,
+    "print_credits": 0,
+    "sales_tax": 0,
+    "convenience_fee": 1.01,
+    "total": 34.56,
+    "currency": "USD"
+  },
+  "created_at": "2026-10-09T04:44:53.990Z",
+  "mailed_at": "2026-10-13T20:29:12.510Z"
+}
+```
+
 > **Notes:**
-> - The response includes **both** `cost_estimate` and `cost`. `cost_estimate` is populated from the `draft` onward; `cost` stays `null` until the job reaches `completed`, at which point it holds the final actuals (same breakdown shape as `cost_estimate`).
+> - The response includes **both** `cost_estimate` and `cost`. `cost_estimate` is populated from the `draft` onward; `cost` stays `null` until the job reaches `completed`, at which point it holds the final actuals (same breakdown shape as `cost_estimate` — in the verified example above the actuals matched the estimate exactly).
 > - `certificate_ready` is `false` until the job completes; `mailed_at` is `null` until envelopes are mailed.
 > - `external_reference` is present only when you supplied one on the draft.
 > - For PACER-sourced jobs the PACER lookup runs at **draft creation**, so `recipient_count` and the estimate are known from the `draft` onward.
@@ -1084,21 +1115,11 @@ The certificate of service PDF is generated when the job completes. It is stored
 
 #### `GET /jobs/mailings/{job_id}/certificate`
 
-Download the certificate of service. Returns a signed URL that expires in 15 minutes and can be re-fetched at any time within the 90-day retention window.
+Download the certificate of service.
 
-**Response `200 OK`:**
+**Response `200 OK`:** `[CHANGED — verified live]` Returns the **certificate PDF directly** as the response body (`Content-Type: application/pdf`), **not** a JSON object with a signed URL. Earlier drafts of this spec described a JSON response with `certificate_url` / `url_expires_at` / `generated_at` / `stored_until`; the live endpoint instead streams the PDF bytes. Clients should handle the response as a file download, not JSON.
 
-```
-{
-  "job_id": "job_z9y8x7",
-  "certificate_url": "https://certificates.certificateofservice.com/signed/...",
-  "url_expires_at": "2026-05-26T18:30:00Z",
-  "generated_at": "2026-05-27T14:35:00Z",
-  "stored_until": "2026-08-25T14:35:00Z"
-}
-```
-
-Returns `404` if the certificate is not yet ready (check `certificate_ready` on `GET /jobs/mailings/{job_id}` first) or if the 90-day retention window has passed. Verified live: on a non-completed job this returns the JSON error envelope `404 {"error":{"code":"not_found","message":"Certificate not found"}}`. The `200` signed-URL response shape above has **not** been verified against a completed job on staging (jobs did not reach `completed` during testing).
+Returns `404` if the certificate is not yet ready (check `certificate_ready` on `GET /jobs/mailings/{job_id}` first) or if the 90-day retention window has passed. Verified live: on a non-completed job this returns the JSON error envelope `404 {"error":{"code":"not_found","message":"Certificate not found"}}`; on a `completed` job it returns `200` with the PDF.
 
 ---
 
@@ -1261,7 +1282,8 @@ All errors return a consistent envelope:
 - `GET /jobs/mailings/{id}` returns **both** `cost_estimate` and `cost` (`cost` is `null` until completed).
 - `GET .../cost` omits `job_id`, `case_number`, `recipient_count`.
 - For PACER-sourced jobs, `debtor_name`, `chapter`, and `judge_name` are resolved from PACER and echoed back even when not supplied; `user_supplied` recipients yield a `null` draft estimate.
-- Certificate endpoint verified to return the `404 not_found` envelope when not ready; the `200` signed-URL shape remains unverified (staging did not advance jobs to `completed`).
+- **Certificate endpoint returns the PDF directly** (`200`, `application/pdf`), not a JSON object with a signed URL as earlier drafts described. Verified end-to-end: `404 not_found` envelope when not ready, `200` PDF on a completed job.
+- Verified the `completed` job state (via the internal print-confirmation step): `cost` is populated with final actuals (matched the estimate), `certificate_ready: true`, `mailed_at` set.
 
 **Errors**
 
