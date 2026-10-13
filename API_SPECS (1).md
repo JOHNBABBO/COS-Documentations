@@ -27,8 +27,9 @@ API key authentication via the `Authorization` header. Keys are issued at the **
 Authorization: Bearer <api-key>
 ```
 
-- Keys support optional **IP allowlists** and **per-credential scopes**
 - Key rotation: request a new key from CoS; old key remains active during a transition window you agree on with CoS
+
+> **⚠️ Not implemented:** earlier drafts described optional **IP allowlists** and **per-credential scopes** on keys. These are **not implemented** in the current API. (The `ipAllowlist` attribute exists on partner records internally but is unused/empty and not enforced; there are no per-credential scopes.) Do not design integrations around them. See also the `403 forbidden` error below.
 
 ---
 
@@ -185,6 +186,8 @@ Retrieve an organization by ID. Scoped to the authenticating partner — returns
 ---
 
 #### `GET /organizations`
+
+> **⚠️ Not implemented yet.** This list endpoint is **not currently mounted** on the API — a request to `GET /v1/cos/organizations` (no ID) returns `404 Cannot GET`. The behavior below is the intended contract; until it ships, retain the `organization_id` returned by `POST /organizations` (there is no lookup-by-`external_id` fallback available, and `external_id` uniqueness is not enforced — see Errors).
 
 List organizations belonging to the authenticating partner. **Results are always filtered to the partner's own organizations (scoped by API key)** — a partner can never see another partner's organizations. Use the `external_id` filter to recover the CoS `organization_id` for an org you created (e.g. if you didn't persist it from the `POST` response).
 
@@ -570,15 +573,18 @@ Check whether a valid payment method is on file. Only applicable to organization
   "payment_method": {
     "type": "card",
     "last4": "4242",
-    "brand": "visa"
+    "brand": "visa",
+    "is_default": true
   },
   "payment_standing": "ok",
   "orders_blocked": false,
-  "outstanding_balance": { "amount": 0.0, "currency": "USD" }
+  "outstanding_balance": { "amount": 0, "currency": "USD" }
 }
 ```
 
 If no payment method is configured, `payment_configured` will be `false` and `payment_method` will be `null`.
+
+> `payment_method` includes an `is_default` boolean (not shown in earlier drafts). Numeric amounts are returned as plain numbers (e.g. `0`, not `0.0`).
 
 **Declined-payment semantics.** An organization with an unresolved declined payment is prevented from submitting new jobs until it clears the outstanding balance **and** supplies a new acceptable payment method. The platform tracks this state internally (job status `completed_payment_declined`, `order.payment_failed_at`, and admin notifications), so the partner API surfaces it here rather than introducing a separate endpoint:
 
@@ -589,6 +595,8 @@ If no payment method is configured, `payment_configured` will be `false` and `pa
 | `outstanding_balance` | object  | Amount that must be cleared before `orders_blocked` returns to `false`. `{ amount, currency }`.                                                               |
 
 When `orders_blocked` is `true`, `POST /jobs/mailings/{id}/submit` returns `402 payment_required` (a `draft` can still be created and estimated). To recover, the partner directs the customer back through `POST /organizations/{id}/billing/setup` (re-auth flow) and settles the outstanding balance; the block lifts automatically once both are resolved.
+
+> **Known message quirk (verified):** when a Stripe org simply has **no payment method on file** (`payment_configured: false`), the `402` message currently reads *"Orders are blocked: payment_standing is \"ok\". Outstanding balance: $0.00 USD..."* — which is misleading, since the block is driven by the missing payment method, not by `payment_standing` (which is `ok`). Gate the UI on `orders_blocked` / `payment_configured` rather than parsing this message. (Backend message bug; flagged to the team.)
 
 ---
 
@@ -732,9 +740,9 @@ The request body is split into two parts: a JSON metadata field named `job` cont
   "recipients": {
     "source": "pacer"
   },
-  "contact_id": "con_123",
-  "return_address_id": "ra_123",
-  "signature_id": "sig_123",
+  "contact_id": 15,
+  "return_address_id": 10,
+  "signature_id": 10,
   "notifications": {
     "primary_email": "trustee@example.com",
     "cc_emails": ["ops@example.com", "txi+123@veritatfs.com"]
@@ -771,9 +779,9 @@ Each object in the `documents` array corresponds positionally to a file in the `
 | `proofOfClaims`                       | array  |                            | Up to 1 proof of claim metadata object. Maps positionally to `proofOfClaimFiles`.                                                                                                |
 | `recipients.source`                   | string | ✓                          | `"pacer"` or `"user_supplied"`                                                                                                                                                   |
 | `recipients.addresses`                | array  | if source=user\_supplied   | See recipient object below                                                                                                                                                       |
-| `contact_id`                          | string |                            | `[CHANGED 2026-07-14]` Reference a saved org contact for this job's notifications. `404 contact_not_found` if unknown.                                                           |
-| `return_address_id`                   | string |                            | `[CHANGED 2026-07-14]` Reference a saved org return address. `404 return_address_not_found` if unknown. Ignored when an inline `return_address` is supplied.                     |
-| `signature_id`                        | string |                            | `[CHANGED 2026-07-14]` Reference a saved org signature. `404 signature_not_found` if unknown. Ignored when an inline `signature` is supplied.                                    |
+| `contact_id`                          | integer |                           | `[CHANGED 2026-07-14]` Reference a saved org contact for this job's notifications. `404 contact_not_found` if unknown.                                                           |
+| `return_address_id`                   | integer |                           | `[CHANGED 2026-07-14]` Reference a saved org return address. `404 return_address_not_found` if unknown. Ignored when an inline `return_address` is supplied.                     |
+| `signature_id`                        | integer |                           | `[CHANGED 2026-07-14]` Reference a saved org signature. `404 signature_not_found` if unknown. Ignored when an inline `signature` is supplied.                                    |
 | `notifications`                       | object |                            | `[CHANGED 2026-07-14]` See job notifications below                                                                                                                              |
 | `order_preferences.sides`             | string |                            | `"double_sided"` (default) or `"one_sided"`                                                                                                                                      |
 | `order_preferences.format`            | string |                            | `"2up"` (default) or `"1up"`. `4up` is not yet supported.                                                                                                                        |
@@ -964,36 +972,42 @@ Get job status and details. **Poll this endpoint to track progress.**
 
 **Response `200 OK`:** `[CHANGED 2026-07-14]` now includes `debtor_name`, `chapter`, and `judge_name` as stored by CoS.
 
+Example below shows an in-progress (`printing`) job. The response carries **both** `cost_estimate` (populated from draft onward) and `cost` (`null` until the job completes):
+
 ```
 {
-  "job_id": "job_z9y8x7",
-  "organization_id": "org_a1b2c3",
-  "status": "completed",
+  "job_id": "0000000459",
+  "organization_id": "7780303033",
+  "status": "printing",
   "type": "bankruptcy_notice",
-  "case_number": "2:24-bk-10001",
-  "debtor_name": "Acme Debtor LLC",
-  "chapter": "11",
-  "judge_name": "Hon. Jane Smith",
-  "external_reference": "case-10001-notice-q1",
-  "recipient_count": 47,
-  "certificate_ready": true,
-  "cost": {
-    "document_processing": 0.0,
-    "usps_postage": 32.17,
-    "CM_ECF_Fees": 0.30,
-    "subtotal": 40.63,
-    "print_credits": 0.0,
-    "sales_tax": 0.0,
-    "convenience_fee": 0.0,
-    "total": 40.63,
+  "case_number": "20-bk-01701",
+  "debtor_name": "Shalonda Megail Jennings",
+  "chapter": "13",
+  "judge_name": "Katharine M. Samson",
+  "recipient_count": 46,
+  "certificate_ready": false,
+  "cost_estimate": {
+    "document_processing": 5.95,
+    "usps_postage": 27.3,
+    "CM_ECF_Fees": 0.3,
+    "subtotal": 33.55,
+    "print_credits": 0,
+    "sales_tax": 0,
+    "convenience_fee": 1.01,
+    "total": 34.56,
     "currency": "USD"
   },
-  "created_at": "2026-05-26T18:05:00Z",
-  "mailed_at": "2026-05-27T14:30:00Z"
+  "cost": null,
+  "created_at": "2026-10-09T04:44:53.990Z",
+  "mailed_at": null
 }
 ```
 
-For PACER-sourced jobs the PACER lookup runs at **draft creation**, so `recipient_count` and the cost are known from the `draft` onward (returned as `cost_estimate`). Once the job reaches `completed`, `cost` reflects final actuals.
+> **Notes:**
+> - The response includes **both** `cost_estimate` and `cost`. `cost_estimate` is populated from the `draft` onward; `cost` stays `null` until the job reaches `completed`, at which point it holds the final actuals (same breakdown shape as `cost_estimate`).
+> - `certificate_ready` is `false` until the job completes; `mailed_at` is `null` until envelopes are mailed.
+> - `external_reference` is present only when you supplied one on the draft.
+> - For PACER-sourced jobs the PACER lookup runs at **draft creation**, so `recipient_count` and the estimate are known from the `draft` onward.
 
 **Job status values:**
 
@@ -1084,7 +1098,7 @@ Download the certificate of service. Returns a signed URL that expires in 15 min
 }
 ```
 
-Returns `404` if the certificate is not yet ready (check `certificate_ready` on `GET /jobs/mailings/{job_id}` first) or if the 90-day retention window has passed.
+Returns `404` if the certificate is not yet ready (check `certificate_ready` on `GET /jobs/mailings/{job_id}` first) or if the 90-day retention window has passed. Verified live: on a non-completed job this returns the JSON error envelope `404 {"error":{"code":"not_found","message":"Certificate not found"}}`. The `200` signed-URL response shape above has **not** been verified against a completed job on staging (jobs did not reach `completed` during testing).
 
 ---
 
@@ -1096,26 +1110,25 @@ Detailed per-recipient cost data for billing passthrough. Chapter 13 trustees us
 
 #### `GET /jobs/mailings/{job_id}/cost`
 
-Returns `null` for all fields until the job reaches `completed` status.
+Returns `null` for all monetary fields until the job reaches `completed` status (`currency` is always present).
 
-**Response `200 OK`:**
+**Response `200 OK` (before completion):**
 
 ```
 {
-  "job_id": "job_z9y8x7",
-  "case_number": "2:24-bk-10001",
-  "recipient_count": 47,
-  "document_processing": 0.0,
-  "usps_postage": 32.17,
-  "CM_ECF_Fees": 0.30,
-  "subtotal": 40.63,
-  "print_credits": 0.0,
-  "sales_tax": 0.0,
-  "convenience_fee": 0.0,
-  "total": 40.63,
+  "document_processing": null,
+  "usps_postage": null,
+  "CM_ECF_Fees": null,
+  "subtotal": null,
+  "print_credits": null,
+  "sales_tax": null,
+  "convenience_fee": null,
+  "total": null,
   "currency": "USD"
 }
 ```
+
+> **The cost response does not include `job_id`, `case_number`, or `recipient_count`** (earlier drafts of this spec showed them at the top of the object — the live response omits them). Once the job completes, the monetary fields are populated with final actuals. A `per_notice_rate` field appears in some cost objects but is **not consistently present**.
 
 ---
 
@@ -1141,12 +1154,12 @@ All errors return a consistent envelope:
 | 401  | `unauthorized`       | Invalid or missing API key                                                                                                                                                                    |
 | 402  | `payment_required`   | No valid payment method on file, or an unresolved declined payment is blocking new orders (Stripe-billed orgs only). Check `payment_standing` / `orders_blocked` on `GET .../billing/status`. |
 | 403  | `terms_not_accepted` | Org has not accepted the current Terms of Service; direct the customer through the hosted flow via `POST .../terms/setup` (applies only where `terms_required` is `true`).                                   |
-| 403  | `forbidden`          | Credential lacks scope for this action                                                                                                                                                        |
+| 403  | `forbidden`          | Action not allowed for this organization's configuration. **Verified:** returned when a `monthly_invoice` org calls `billing/status` or `billing/setup`, and when a `terms_required:false` org calls `terms/setup`. **Not implemented:** per-credential *scopes* — the "credential lacks scope" meaning from earlier drafts does not apply (scopes are not implemented; see Authentication). |
 | 404  | `not_found`          | Resource doesn't exist                                                                                                                                                                        |
-| 404  | `contact_not_found`  | `[CHANGED 2026-07-14]` `contact_id` does not exist on this organization                                                                                                                       |
+| 404  | `contact_not_found`  | `[CHANGED 2026-07-14]` `contact_id` does not exist on this organization. **Note:** for a missing contact the response top-level `code` is `not_found` and the specific `contact_not_found` is nested under `details.code` — unlike `return_address_not_found` / `signature_not_found`, which return the specific code at the top level. |
 | 404  | `return_address_not_found` | `[CHANGED 2026-07-14]` `return_address_id` does not exist on this organization                                                                                                          |
 | 404  | `signature_not_found` | `[CHANGED 2026-07-14]` `signature_id` does not exist on this organization                                                                                                                    |
-| 409  | `conflict`           | Duplicate `external_reference` (scoped per org), non-unique phone number, or duplicate contact email / record name within an org                                                              |
+| 409  | `conflict`           | Duplicate contact email within an org (verified — `details: { field: "email", code: "contact_email_conflict" }`), non-unique phone number, or duplicate record name within an org. **⚠️ `external_id` on organizations is NOT currently enforced as unique** — creating two orgs with the same `external_id` both succeed (`201`) rather than returning `409`. This is a known gap vs. the intended contract (flagged to the backend team); do not rely on `external_id` uniqueness. |
 | 413  | `payload_too_large`  | Over 100mb file size in total for the added documents                                                                                                                                         |
 | 422  | `validation_error`   | Input passes format checks but fails business logic                                                                                                                                           |
 | 422  | `default_required`   | `[CHANGED 2026-07-14]` Job supplied neither an inline override nor a saved-record reference, and the org has no default for that record type                                                  |
