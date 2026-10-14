@@ -1184,7 +1184,7 @@ All errors return a consistent envelope:
 | 403  | `terms_not_accepted` | Org has not accepted the current Terms of Service; direct the customer through the hosted flow via `POST .../terms/setup` (applies only where `terms_required` is `true`).                                   |
 | 403  | `forbidden`          | Action not allowed for this organization's configuration. **Verified:** returned when a `monthly_invoice` org calls `billing/status` or `billing/setup`, and when a `terms_required:false` org calls `terms/setup`. **Not implemented:** per-credential *scopes* — the "credential lacks scope" meaning from earlier drafts does not apply (scopes are not implemented; see Authentication). |
 | 404  | `not_found`          | Resource doesn't exist                                                                                                                                                                        |
-| 404  | `contact_not_found`  | `[CHANGED 2026-07-14]` `contact_id` does not exist on this organization. **Note:** for a missing contact the response top-level `code` is `not_found` and the specific `contact_not_found` is nested under `details.code` — unlike `return_address_not_found` / `signature_not_found`, which return the specific code at the top level. |
+| 404  | `contact_not_found`  | `[CHANGED 2026-07-14]` `contact_id` does not exist on this organization.                                                                                                                     |
 | 404  | `return_address_not_found` | `[CHANGED 2026-07-14]` `return_address_id` does not exist on this organization                                                                                                          |
 | 404  | `signature_not_found` | `[CHANGED 2026-07-14]` `signature_id` does not exist on this organization                                                                                                                    |
 | 409  | `conflict`           | Duplicate contact email within an org (verified — `details: { field: "email", code: "contact_email_conflict" }`), non-unique phone number, or duplicate record name within an org. **⚠️ `external_id` on organizations is NOT currently enforced as unique** — creating two orgs with the same `external_id` both succeed (`201`) rather than returning `409`. This is a known gap vs. the intended contract (flagged to the backend team); do not rely on `external_id` uniqueness. |
@@ -1294,7 +1294,7 @@ All errors return a consistent envelope:
 **Errors**
 
 - `409 conflict`: **`external_id` uniqueness is not currently enforced** on organizations (duplicates return `201`) — flagged as a backend gap, not just a doc note.
-- `contact_not_found` returns its specific code nested under `details.code` (top-level `code` is `not_found`), unlike `return_address_not_found` / `signature_not_found`.
+- `contact_not_found` now returns the specific code at the top level (consistent with `return_address_not_found` / `signature_not_found`).
 - `403 forbidden`: documented the verified billing/terms-config meanings; noted that per-credential **scopes are not implemented**.
 
 **Authentication**
