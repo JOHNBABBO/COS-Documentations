@@ -423,7 +423,7 @@ Delete a saved signature. See [Deletion rules](#deletion-rules-for-saved-records
 
 **`[CHANGED 2026-07-14]`** *New section.* These rules apply uniformly to contacts, return addresses, and signatures:
 
-- **Zero or one default** per resource type per organization. Attempting to create a second default in a single request without clearing the first returns `422 multiple_defaults_not_allowed` — but in practice this cannot occur, because:
+- **Zero or one default** per resource type per organization. Setting `is_default: true` on a new or updated record automatically clears the prior default in the same operation — there is never more than one default at a time.
 - **Setting a new default automatically clears the previous one.** Creating or patching a record with `is_default: true` demotes the prior default in the same operation.
 - **If no default exists** for a resource type, a job must either reference a saved record by ID or supply an inline override. A job that supplies neither is rejected with `422 default_required`.
 - **Deleting a default is allowed** and leaves the organization with no default for that type until another record is promoted. Future jobs must then explicitly specify a record or override until a new default is set.
@@ -1184,14 +1184,13 @@ All errors return a consistent envelope:
 | 403  | `terms_not_accepted` | Org has not accepted the current Terms of Service; direct the customer through the hosted flow via `POST .../terms/setup` (applies only where `terms_required` is `true`).                                   |
 | 403  | `forbidden`          | Action not allowed for this organization's configuration. **Verified:** returned when a `monthly_invoice` org calls `billing/status` or `billing/setup`, and when a `terms_required:false` org calls `terms/setup`. **Not implemented:** per-credential *scopes* — the "credential lacks scope" meaning from earlier drafts does not apply (scopes are not implemented; see Authentication). |
 | 404  | `not_found`          | Resource doesn't exist                                                                                                                                                                        |
-| 404  | `contact_not_found`  | `[CHANGED 2026-07-14]` `contact_id` does not exist on this organization. **Note:** for a missing contact the response top-level `code` is `not_found` and the specific `contact_not_found` is nested under `details.code` — unlike `return_address_not_found` / `signature_not_found`, which return the specific code at the top level. |
+| 404  | `contact_not_found`  | `[CHANGED 2026-07-14]` `contact_id` does not exist on this organization.                                                                                                                     |
 | 404  | `return_address_not_found` | `[CHANGED 2026-07-14]` `return_address_id` does not exist on this organization                                                                                                          |
 | 404  | `signature_not_found` | `[CHANGED 2026-07-14]` `signature_id` does not exist on this organization                                                                                                                    |
 | 409  | `conflict`           | Duplicate contact email within an org (verified — `details: { field: "email", code: "contact_email_conflict" }`), non-unique phone number, or duplicate record name within an org. **⚠️ `external_id` on organizations is NOT currently enforced as unique** — creating two orgs with the same `external_id` both succeed (`201`) rather than returning `409`. This is a known gap vs. the intended contract (flagged to the backend team); do not rely on `external_id` uniqueness. |
 | 413  | `payload_too_large`  | Over 100mb file size in total for the added documents                                                                                                                                         |
 | 422  | `validation_error`   | Input passes format checks but fails business logic                                                                                                                                           |
 | 422  | `default_required`   | `[CHANGED 2026-07-14]` Job supplied neither an inline override nor a saved-record reference, and the org has no default for that record type                                                  |
-| 422  | `multiple_defaults_not_allowed` | `[CHANGED 2026-07-14]` Request would result in more than one default record of a type                                                                                              |
 | 422  | `invalid_notification_email` | `[CHANGED 2026-07-14]` A `notifications` email failed format validation                                                                                                               |
 | 422  | `too_many_cc_emails` | `[CHANGED 2026-07-14]` `notifications.cc_emails` exceeds the maximum of 10                                                                                                                    |
 | 422  | `missing_contact_email` | `[CHANGED 2026-07-14]` No notification email could be resolved (no `primary_email`, no contact email, no org default contact)                                                              |
@@ -1295,7 +1294,7 @@ All errors return a consistent envelope:
 **Errors**
 
 - `409 conflict`: **`external_id` uniqueness is not currently enforced** on organizations (duplicates return `201`) — flagged as a backend gap, not just a doc note.
-- `contact_not_found` returns its specific code nested under `details.code` (top-level `code` is `not_found`), unlike `return_address_not_found` / `signature_not_found`.
+- `contact_not_found` now returns the specific code at the top level (consistent with `return_address_not_found` / `signature_not_found`).
 - `403 forbidden`: documented the verified billing/terms-config meanings; noted that per-credential **scopes are not implemented**.
 
 **Authentication**
@@ -1341,7 +1340,7 @@ All errors return a consistent envelope:
 **Errors**
 
 - Replaced the blanket `pacer_error` with `pacer_unavailable`, `case_not_found`, `case_ambiguous`, and `debtor_name_mismatch`.
-- Added saved-record errors (`contact_not_found`, `return_address_not_found`, `signature_not_found`), default-management errors (`default_required`, `multiple_defaults_not_allowed`), and notification errors (`invalid_notification_email`, `too_many_cc_emails`, `missing_contact_email`).
+- Added saved-record errors (`contact_not_found`, `return_address_not_found`, `signature_not_found`), default-management error (`default_required`), and notification errors (`invalid_notification_email`, `too_many_cc_emails`, `missing_contact_email`).
 - Added worked examples for `debtor_name_mismatch`, `case_ambiguous`, and `default_required`.
 
 **Terms of Service — acceptance is now CoS-managed**
