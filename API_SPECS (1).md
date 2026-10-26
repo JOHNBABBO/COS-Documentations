@@ -804,6 +804,11 @@ Use `"pacer"` to pull the recipient list from PACER using the submitted court an
 
 **`[CHANGED 2026-07-14]`** If the PACER/case lookup fails, draft creation returns a `422` with one of the specific case-resolution codes: `pacer_unavailable`, `case_not_found`, `case_ambiguous`, or `debtor_name_mismatch` (see [Errors](#errors)).
 
+**PACER outage fallback.** When PACER is unavailable you can recover without waiting for service restoration:
+
+- **`source = "user_supplied"` jobs**: if PACER is down during the case-details lookup and any of `bankruptcy_options.debtor_name`, `chapter`, or `judge_name` are absent, the API returns `504 case_details_required`. Supply all three fields inline and the job is created successfully using those values. When all three are already provided, the job succeeds even when PACER is unreachable.
+- **`source = "pacer"` jobs**: if PACER is down, the API always returns `504 pacer_fallback_required` — both the address list and all case detail fields are required. Re-submit with `recipients.source = "user_supplied"`, a `recipients.addresses` array, and `bankruptcy_options.debtor_name`, `chapter`, and `judge_name`. `details.missing_case_fields` shows which case fields are still absent from the current request.
+
 **Recipient object (when `source = "user_supplied"`):**
 
 ```
@@ -1194,11 +1199,13 @@ All errors return a consistent envelope:
 | 422  | `invalid_notification_email` | `[CHANGED 2026-07-14]` A `notifications` email failed format validation                                                                                                               |
 | 422  | `too_many_cc_emails` | `[CHANGED 2026-07-14]` `notifications.cc_emails` exceeds the maximum of 10                                                                                                                    |
 | 422  | `missing_contact_email` | `[CHANGED 2026-07-14]` No notification email could be resolved (no `primary_email`, no contact email, no org default contact)                                                              |
-| 422  | `pacer_unavailable`  | `[CHANGED 2026-07-14]` PACER or the related lookup service is unavailable — job not created; retry later                                                                                      |
+| 422  | `pacer_unavailable`  | `[CHANGED 2026-07-14]` PACER or the related lookup service is unavailable and no inline fallback applies — job not created. See `case_details_required` / `pacer_fallback_required` below for recoverable outage scenarios. |
 | 422  | `case_not_found`     | `[CHANGED 2026-07-14]` No case found for the supplied case number / court location                                                                                                            |
 | 422  | `case_ambiguous`     | `[CHANGED 2026-07-14]` Multiple possible cases matched — supply `court_location.division` and/or `debtor_name` to disambiguate                                                                |
 | 422  | `debtor_name_mismatch` | `[CHANGED 2026-07-14]` Supplied `debtor_name` did not match the PACER-resolved case (see example below)                                                                                     |
 | 429  | `rate_limited`       | Too many requests — see `Retry-After` header                                                                                                                                                  |
+| 504  | `case_details_required` | PACER is unavailable and one or more case detail fields were not supplied inline (`source = "user_supplied"` jobs only). Provide `bankruptcy_options.debtor_name`, `.chapter`, and `.judge_name`. `details.missing_case_fields` lists the specific absent fields. |
+| 504  | `pacer_fallback_required` | PACER is unavailable and the job used `source = "pacer"`. The entire sourcing strategy must change: re-submit with `recipients.source = "user_supplied"`, a `recipients.addresses` array, and all three case detail fields. `details.missing_fields` lists everything not yet present in the request — `recipients.source`, `recipients.addresses` are always listed; case detail fields appear only when absent. |
 | 500  | `internal_error`     | CoS-side error                                                                                                                                                                                |
 
 **Example — `debtor_name_mismatch`:** `[CHANGED 2026-07-14]`
@@ -1249,9 +1256,63 @@ All errors return a consistent envelope:
 }
 ```
 
+**Example — `case_details_required`** (`source = "user_supplied"` jobs):
+
+```
+{
+  "error": {
+    "code": "case_details_required",
+    "message": "PACER is unavailable. Provide all case detail fields inline to proceed.",
+    "job_id": null,
+    "details": {
+      "missing_case_fields": [
+        "bankruptcy_options.debtor_name",
+        "bankruptcy_options.chapter",
+        "bankruptcy_options.judge_name"
+      ]
+    }
+  }
+}
+```
+
+> `missing_case_fields` contains only the fields not yet present in the request. When all three are already supplied the job succeeds without error.
+
+**Example — `pacer_fallback_required`** (`source = "pacer"` jobs):
+
+```
+{
+  "error": {
+    "code": "pacer_fallback_required",
+    "message": "PACER is unavailable. Re-submit with recipients.source = \"user_supplied\", a recipients.addresses array, and all case detail fields.",
+    "job_id": null,
+    "details": {
+      "missing_fields": [
+        "recipients.source (must be \"user_supplied\")",
+        "recipients.addresses",
+        "bankruptcy_options.chapter",
+        "bankruptcy_options.judge_name"
+      ]
+    }
+  }
+}
+```
+
+> `recipients.source` and `recipients.addresses` are always present in `missing_fields` for this error. Case detail fields appear only when absent from the current request — when all three are already provided, `missing_fields` contains only the two address entries.
+
 ---
 
 ## Changelog
+
+### 2026-10-22
+
+**`pacer_fallback_required` replaces split PACER 504 codes**
+
+- Retired `504 address_list_required`. All `source = "pacer"` + PACER-down scenarios now return **`504 pacer_fallback_required`** — a single, unambiguous signal that the partner must switch their entire sourcing strategy: re-submit with `user_supplied` source, a `recipients.addresses` array, and all case detail fields (`debtor_name`, `chapter`, `judge_name`). `details.missing_case_fields` shows which of the three case fields are still absent from the current request (empty array when all are already provided).
+- `504 case_details_required` is now exclusively for `source = "user_supplied"` jobs where PACER is down and one or more case header fields are missing. The `details` key is renamed from `missing_fields` to `missing_case_fields` for consistency.
+- No change to the `user_supplied` success path (all fields provided → job created) or to any other error code.
+- `422 pacer_unavailable` is retained for non-recoverable PACER failures where inline fallback is not applicable.
+
+---
 
 ### 2026-10-09
 
