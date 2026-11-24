@@ -818,10 +818,17 @@ Use `"pacer"` to pull the recipient list from PACER using the submitted court an
     "address": [
       "PO Box 15019",
       "Wilmington, DE 19850"
-    ]
+    ],
+    "accept_unrecognized": false
   }
 ]
 ```
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `name` | string | ✓ | Recipient display name. Max 50 characters. |
+| `address` | array | ✓ | Address label lines (1–5 lines for US, 1–4 for non-US). Each line max 50 characters. Blank lines are stripped. |
+| `accept_unrecognized` | boolean | | Default `false`. When `true` and the address fails recognition (AI pipeline returns `invalid_address`), the address is accepted and mailed as supplied — the API equivalent of the web UI "approve anyway" action. See [Address validation](#address-validation-for-user_supplied-jobs) for full details. |
 
 **Job notifications (`notifications`):** `[CHANGED 2026-07-14]` *New object.*
 
@@ -915,6 +922,33 @@ One-off inline override for this job — takes precedence over `signature_id` an
 
 **Response `201 Created`:** The job is created in `draft` status with an itemized `cost_estimate`. Review it, then confirm with `POST /jobs/mailings/{job_id}/submit`. `[CHANGED 2026-07-14]` The response echoes `debtor_name`, `chapter`, and `judge_name` as stored/resolved by CoS so partners can reconcile them.
 
+For **`user_supplied`** jobs, the response also includes a `recipients` array with `address_status` for each submitted address. All addresses in a successfully created job have `address_status: "approved"` (they either passed validation or were accepted via `accept_unrecognized: true`). `recipients` is omitted for PACER-sourced jobs.
+
+**Example — `user_supplied` job (`cost_estimate` is `null`; `recipients` lists each submitted address):**
+
+```
+{
+  "job_id": "0000000459",
+  "organization_id": "7780303033",
+  "status": "draft",
+  "type": "bankruptcy_notice",
+  "case_number": "20-bk-01701",
+  "debtor_name": "Shalonda Megail Jennings",
+  "chapter": "13",
+  "judge_name": "Katharine M. Samson",
+  "document_count": 1,
+  "recipient_count": 46,
+  "cost_estimate": null,
+  "created_at": "2026-10-09T04:44:53.990Z",
+  "recipients": [
+    { "index": 0, "name": "Bank of America NA", "address_status": "approved" },
+    { "index": 1, "name": "Jane Doe",           "address_status": "approved" }
+  ]
+}
+```
+
+**Example — PACER-sourced job (`cost_estimate` populated; `recipients` field is omitted):**
+
 ```
 {
   "job_id": "0000000459",
@@ -950,6 +984,138 @@ One-off inline override for this job — takes precedence over `signature_id` an
 > - `expires_at` is **not currently returned** on the draft response, although drafts still expire after 48h.
 > - For **`user_supplied`** recipients, `cost_estimate` is returned as `null` (no estimate computed at draft time); it is populated for PACER jobs.
 > - `external_reference` is echoed only when you supply it.
+
+---
+
+#### Address validation for `user_supplied` jobs
+
+**`[CHANGED 2026-11-23]`** When `recipients.source = "user_supplied"`, every address is validated at draft creation against the same rules the CoS web UI applies. The job is not created if any address fails; instead, a detailed error lists every failing address so the partner can fix or consent in one round-trip.
+
+**Validation tiers (in order):**
+
+**Tier 1 — Structural (400, not bypassable):** An address with no `name` or no `address` lines is a malformed request. This intentionally differs from the web UI where blank addresses are silently ignored.
+
+**Tier 2 — Format (400, not bypassable):** Hard limits that mirror the web UI's hard stops:
+- `too_many_lines`: More than 5 content lines for US addresses, or more than 4 for non-US addresses
+- `long_lines`: Any address line or the name exceeds 50 characters
+
+**Tier 3 — Recognition (422, bypassable with `accept_unrecognized`):** The CoS AI pipeline determines the address is not a recognizable, deliverable postal address (`invalid_address`). The partner can bypass per-address by setting `accept_unrecognized: true`.
+
+**Error response — 400 (structural or format failures):**
+
+```json
+{
+  "error": {
+    "code": "invalid_request",
+    "message": "2 recipient addresses have format errors.",
+    "job_id": null,
+    "details": {
+      "addresses": [
+        { "index": 0, "name": "Bank of America NA", "reasons": ["too_many_lines"] },
+        { "index": 5, "name": "John Smith",         "reasons": ["long_lines"] }
+      ]
+    }
+  }
+}
+```
+
+**Error response — 400 (mixed: format failures on some addresses + recognition failures on others):**
+
+When hard-stop failures and recognition failures exist on **different** addresses, all are reported together in a single `400` so the partner can fix format errors **and** add `accept_unrecognized: true` in one corrective request rather than discovering the recognition failures on a second attempt. The message notes both counts:
+
+```json
+{
+  "error": {
+    "code": "invalid_request",
+    "message": "2 recipient addresses have format errors; 1 additional address could not be recognized (set accept_unrecognized: true to bypass).",
+    "job_id": null,
+    "details": {
+      "addresses": [
+        { "index": 0, "name": "Bank of America NA", "reasons": ["too_many_lines"] },
+        { "index": 3, "name": "John Smith",         "reasons": ["long_lines"] },
+        { "index": 7, "name": "ABC Lending",        "reasons": ["invalid_address"] }
+      ]
+    }
+  }
+}
+```
+
+> Note: an address that has a format failure (`too_many_lines` or `long_lines`) will only report the format reason — the recognition check is skipped for that specific address since the format issue must be resolved first.
+
+**Error response — 422 (recognition failures only, bypassable):**
+
+```json
+{
+  "error": {
+    "code": "address_unrecognized",
+    "message": "2 recipient addresses could not be recognized. Correct them or set accept_unrecognized to true for each.",
+    "job_id": null,
+    "details": {
+      "addresses": [
+        { "index": 4,  "name": "Jane Doe",    "reasons": ["invalid_address"] },
+        { "index": 17, "name": "ABC Lending", "reasons": ["invalid_address"] }
+      ]
+    }
+  }
+}
+```
+
+Re-sending with `accept_unrecognized: true` on those addresses creates the draft:
+
+```json
+{
+  "addresses": [
+    { "name": "Jane Doe",    "address": ["123 Elm St", "Anytown AZ 00000"], "accept_unrecognized": true },
+    { "name": "ABC Lending", "address": ["PO Box 999"],                     "accept_unrecognized": true }
+  ]
+}
+```
+
+**Reason codes:**
+
+| Code | Tier | Bypassable | Description |
+|---|---|---|---|
+| `empty_name` | 1 | No | `name` is absent or blank |
+| `empty_address` | 1 | No | `address` array is absent or all-blank |
+| `too_many_lines` | 2 | No | > 5 content lines (US) or > 4 (non-US) |
+| `long_lines` | 2 | No | Any line or name exceeds 50 characters |
+| `invalid_address` | 3 | Yes — `accept_unrecognized: true` | AI pipeline does not recognize this as a deliverable postal address |
+
+**PACER jobs are unaffected.** Address validation only applies to `source: "user_supplied"` jobs.
+
+---
+
+#### `GET /jobs/mailings/{job_id}/recipients`
+
+**`[CHANGED 2026-11-23]`** Returns the per-recipient address status list for a job. Only populated for `user_supplied` jobs; PACER-sourced jobs return `source: "pacer"` with `recipients: null`.
+
+Scoping mirrors all other job endpoints — a job belonging to another partner's org returns `404 not_found`.
+
+**Response `200 OK` — `user_supplied` job:**
+
+```json
+{
+  "job_id": "0000000459",
+  "source": "user_supplied",
+  "recipients": [
+    { "index": 0, "name": "Bank of America NA", "address_status": "approved" },
+    { "index": 1, "name": "Jane Doe",           "address_status": "approved" },
+    { "index": 2, "name": "ABC Lending",        "address_status": "approved" }
+  ]
+}
+```
+
+`address_status` is always `"approved"` for recipients in a created job. Addresses that were consented with `accept_unrecognized: true` also show `"approved"` — the consent is stored internally for audit purposes.
+
+**Response `200 OK` — PACER-sourced job:**
+
+```json
+{
+  "job_id": "0000000460",
+  "source": "pacer",
+  "recipients": null
+}
+```
 
 ---
 
@@ -1203,7 +1369,9 @@ All errors return a consistent envelope:
 | 422  | `case_not_found`     | `[CHANGED 2026-07-14]` No case found for the supplied case number / court location                                                                                                            |
 | 422  | `case_ambiguous`     | `[CHANGED 2026-07-14]` Multiple possible cases matched — supply `court_location.division` and/or `debtor_name` to disambiguate                                                                |
 | 422  | `debtor_name_mismatch` | `[CHANGED 2026-07-14]` Supplied `debtor_name` did not match the PACER-resolved case (see example below)                                                                                     |
+| 422  | `address_unrecognized` | **`[CHANGED 2026-11-23]`** One or more `user_supplied` recipient addresses failed the CoS AI validation pipeline and no per-address `accept_unrecognized` consent was provided. The `details.addresses` array lists every failing address with `index`, `name`, and `reasons`. Re-send with `accept_unrecognized: true` on those addresses to bypass. See [Address validation](#address-validation-for-user_supplied-jobs). |
 | 429  | `rate_limited`       | Too many requests — see `Retry-After` header                                                                                                                                                  |
+| 503  | `service_unavailable` | **`[CHANGED 2026-11-23]`** Address validation pipeline (libpostal / Bedrock AI) is temporarily unavailable. Retry the request. Only returned for `user_supplied` draft creation. |
 | 504  | `case_details_required` | PACER is unavailable and one or more case detail fields were not supplied inline (`source = "user_supplied"` jobs only). Provide `bankruptcy_options.debtor_name`, `.chapter`, and `.judge_name`. `details.missing_case_fields` lists the specific absent fields. |
 | 504  | `pacer_fallback_required` | PACER is unavailable and the job used `source = "pacer"`. The entire sourcing strategy must change: re-submit with `recipients.source = "user_supplied"`, a `recipients.addresses` array, and all three case detail fields. `details.missing_fields` lists everything not yet present in the request — `recipients.source`, `recipients.addresses` are always listed; case detail fields appear only when absent. |
 | 500  | `internal_error`     | CoS-side error                                                                                                                                                                                |
@@ -1256,6 +1424,24 @@ All errors return a consistent envelope:
 }
 ```
 
+**Example — `address_unrecognized`:** `[CHANGED 2026-11-23]`
+
+```json
+{
+  "error": {
+    "code": "address_unrecognized",
+    "message": "2 recipient addresses could not be recognized. Correct them or set accept_unrecognized to true for each.",
+    "job_id": null,
+    "details": {
+      "addresses": [
+        { "index": 4,  "name": "Jane Doe",    "reasons": ["invalid_address"] },
+        { "index": 17, "name": "ABC Lending", "reasons": ["invalid_address"] }
+      ]
+    }
+  }
+}
+```
+
 **Example — `case_details_required`** (`source = "user_supplied"` jobs):
 
 ```
@@ -1302,6 +1488,23 @@ All errors return a consistent envelope:
 ---
 
 ## Changelog
+
+### 2026-11-23
+
+**Partner API address validation for `user_supplied` recipients**
+
+- Added three-tier address validation for all `POST /jobs/mailings` requests with `recipients.source = "user_supplied"`. Previously, user-supplied addresses were accepted without any validation; now they go through the same validation rules the CoS web UI enforces.
+- **Tier 1 (400)** — Structurally empty addresses (missing or blank `name`, missing or empty `address` lines) return `400 invalid_request` with a `details.addresses` array listing every failing address by index and reason code (`empty_name`, `empty_address`).
+- **Tier 2 (400)** — Format violations return `400 invalid_request` with reason codes `too_many_lines` (> 5 US lines / > 4 non-US lines) and `long_lines` (any line or name > 50 chars). These are hard stops, consistent with the web UI's hard-stop behavior.
+- **Tier 3 (422, bypassable)** — Addresses the AI pipeline does not recognize as real postal addresses (`invalid_address`) return `422 address_unrecognized`. Partners can bypass per-address by setting `accept_unrecognized: true` on the recipient object.
+- Added `accept_unrecognized` boolean field to the recipient object in `recipients.addresses[]`. Default `false`. Bypasses Tier 3 only.
+- `POST /jobs/mailings` 201 response now includes a `recipients` array for `user_supplied` jobs with `address_status: "approved"` per recipient. `recipients` is omitted for PACER-sourced jobs.
+- Added `GET /jobs/mailings/{job_id}/recipients` endpoint returning the per-recipient list with `address_status`. PACER-sourced jobs return `source: "pacer"`, `recipients: null`.
+- Added error code `address_unrecognized` (422) and `service_unavailable` (503, returned when the validation pipeline is temporarily unreachable).
+- When both hard-stop failures (structural/format) and recognition failures exist on different addresses in the same request, all failures are reported together in a single `400 invalid_request` response so the partner can fix and consent in one corrective request.
+- PACER-sourced jobs are unaffected by all changes above.
+
+---
 
 ### 2026-10-22
 
