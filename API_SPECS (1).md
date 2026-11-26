@@ -855,17 +855,17 @@ Required when `type` is `"bankruptcy_notice"`.
 | `joint_debtor_name`       | string |          | `[ADDED 2026-11-24]` Joint debtor on the main case (the spouse in a joint petition). When PACER is available: validated against the PACER-resolved joint debtor name using the same normalization as `debtor_name`; a mismatch returns `422 debtor_name_mismatch` with `details.field = "joint_debtor_name"`. When PACER is unavailable: used as supplied. Echoed in responses. |
 | `chapter`                 | string |          | `[CHANGED 2026-07-14]` e.g. `"7"`, `"11"`, `"13"`. Stored and shown on the certificate.  |
 | `judge_name`              | string |          | `[CHANGED 2026-07-14]` Stored and shown on the certificate.    |
-| `joint_case_debtors`      | array  |          | `[ADDED 2026-11-24]` Debtor names for each additional (joint) case number. Array of `{ case_number, debtor_name }`. Each `case_number` must match an entry in `case_numbers[1..]`; using `case_numbers[0]` or an unknown value returns `422 validation_error`. Not validated against PACER. Echoed in responses. |
+| `joint_case_debtors`      | array  |          | `[ADDED 2026-11-24]` Debtor names for each additional (joint) case number. Array of `{ case_number, debtor_name }`. `case_number` is a partner-supplied display label — it does **not** need to appear in `case_numbers`, is never looked up in PACER, and has no validation against the main case. All entries are stored and echoed back as supplied. Not validated against PACER. |
 | `adversary_proceeding`    | object |          | All-or-nothing: omit entirely or supply all fields (see below) |
 | `return_envelope`         | object |          | See return envelope object below                               |
 | `certificate_preferences` | object |          | See certificate preferences object below                       |
 
 **Debtor-name comparison rules.** `[CHANGED 2026-07-14]` CoS normalizes case, whitespace, and punctuation before comparing the supplied `debtor_name` against the PACER-resolved debtor. Materially different names are rejected with `422 debtor_name_mismatch`, and the error payload includes both the provided and resolved names so the partner can surface an actionable message (see [Errors](#errors)).
 
-**Joint debtor names.** `[ADDED 2026-11-24]` A joint bankruptcy petition has at most two debtors on the main case (debtor and spouse). The main case's joint debtor is captured in `joint_debtor_name`. Each additional case number listed in `case_numbers[1..]` may optionally carry its own debtor name via `joint_case_debtors`.
+**Joint debtor names.** `[ADDED 2026-11-24]` A joint bankruptcy petition has at most two debtors on the main case (debtor and spouse). The main case's joint debtor is captured in `joint_debtor_name`. Each additional case number may optionally carry its own debtor name via `joint_case_debtors`.
 
 - `joint_debtor_name` is validated against PACER using the same normalization as `debtor_name`. If the partner supplies it and the PACER-resolved joint debtor is non-empty and materially different, CoS returns `422 debtor_name_mismatch` with `details.field = "joint_debtor_name"` to distinguish the error from a primary debtor mismatch.
-- `joint_case_debtors` names are **not** validated against PACER — they are stored and placed on the certificate exactly as supplied (parity with the web app UI).
+- `joint_case_debtors` names are **not** validated against PACER — they are stored and placed on the certificate exactly as supplied (parity with the web app UI). The `case_number` on each entry is a display label for the partner's reference only: it is never sent to PACER and does not need to match any entry in `case_numbers`. All entries submitted are stored and echoed back as-is.
 
 **PACER fallback and joint debtors.** `[ADDED 2026-11-24]` During a PACER outage, `joint_debtor_name` is **not** listed in `details.missing_case_fields` — not every case has a joint debtor, so it is never required. If you know the case has a joint debtor, supply `joint_debtor_name` proactively in the same request; CoS cannot resolve it from PACER during an outage.
 
@@ -994,7 +994,7 @@ Confirm a `draft` job and release it for printing. The job is mailed exactly as 
 
 Get job status and details. **Poll this endpoint to track progress.**
 
-**Response `200 OK`:** `[CHANGED 2026-07-14]` now includes `debtor_name`, `chapter`, and `judge_name` as stored by CoS.
+**Response `200 OK`:** `[CHANGED 2026-07-14]` now includes `debtor_name`, `chapter`, and `judge_name` as stored by CoS. `[ADDED 2026-11-24]` also includes `joint_debtor_name`, `joint_case_debtors`, and `caption_names`.
 
 Example below shows an in-progress (`printing`) job. The response carries **both** `cost_estimate` (populated from draft onward) and `cost` (`null` until the job completes):
 
@@ -1006,8 +1006,17 @@ Example below shows an in-progress (`printing`) job. The response carries **both
   "type": "bankruptcy_notice",
   "case_number": "20-bk-01701",
   "debtor_name": "Shalonda Megail Jennings",
+  "joint_debtor_name": "Michael James Jennings",
   "chapter": "13",
   "judge_name": "Katharine M. Samson",
+  "joint_case_debtors": [
+    { "case_number": "20-bk-01702", "debtor_name": "Robert Alan Smith" }
+  ],
+  "caption_names": [
+    "Shalonda Megail Jennings",
+    "Michael James Jennings",
+    "Robert Alan Smith"
+  ],
   "recipient_count": 46,
   "certificate_ready": false,
   "cost_estimate": {
@@ -1037,8 +1046,17 @@ Once the job reaches `completed` (verified live), `cost` is populated, `certific
   "type": "bankruptcy_notice",
   "case_number": "20-bk-01701",
   "debtor_name": "Shalonda Megail Jennings",
+  "joint_debtor_name": "Michael James Jennings",
   "chapter": "13",
   "judge_name": "Katharine M. Samson",
+  "joint_case_debtors": [
+    { "case_number": "20-bk-01702", "debtor_name": "Robert Alan Smith" }
+  ],
+  "caption_names": [
+    "Shalonda Megail Jennings",
+    "Michael James Jennings",
+    "Robert Alan Smith"
+  ],
   "recipient_count": 46,
   "certificate_ready": true,
   "cost_estimate": { "...": "same breakdown as above" },
@@ -1060,6 +1078,7 @@ Once the job reaches `completed` (verified live), `cost` is populated, `certific
 
 > **Notes:**
 > - The response includes **both** `cost_estimate` and `cost`. `cost_estimate` is populated from the `draft` onward; `cost` stays `null` until the job reaches `completed`, at which point it holds the final actuals (same breakdown shape as `cost_estimate` — in the verified example above the actuals matched the estimate exactly).
+> - `joint_debtor_name` is `null` when the case has no joint debtor. `joint_case_debtors` is `[]` when none were submitted. `caption_names` is `null` for non-bankruptcy jobs. `[ADDED 2026-11-24]`
 > - `certificate_ready` is `false` until the job completes; `mailed_at` is `null` until envelopes are mailed.
 > - `external_reference` is present only when you supplied one on the draft.
 > - For PACER-sourced jobs the PACER lookup runs at **draft creation**, so `recipient_count` and the estimate are known from the `draft` onward.
@@ -1104,7 +1123,8 @@ List mailing jobs for an organization.
 {
   "mailings": [
     /* array of job objects (same shape as GET /jobs/mailings/{id}) —
-       includes debtor_name, chapter, judge_name [CHANGED 2026-07-14] */
+       includes debtor_name, chapter, judge_name [CHANGED 2026-07-14];
+       joint_debtor_name, joint_case_debtors, caption_names [ADDED 2026-11-24] */
   ],
   "pagination": {
     "page": 1,
@@ -1321,6 +1341,31 @@ All errors return a consistent envelope:
 ---
 
 ## Changelog
+
+### 2026-11-24
+
+**Joint debtor names for bankruptcy notices**
+
+Added three new optional fields to `bankruptcy_options` and three new fields to all job responses (`POST /jobs/mailings`, `GET /jobs/mailings/{id}`, `GET /jobs/mailings`).
+
+**New request fields (`bankruptcy_options`):**
+
+- `joint_debtor_name` (string, optional) — the joint debtor on the main case (the spouse in a joint petition). For PACER-sourced jobs, CoS resolves the joint debtor from PACER automatically and echoes it back even when not supplied; a supplied value is validated against the PACER result using the same normalization as `debtor_name`. A mismatch returns `422 debtor_name_mismatch` with `details.field = "joint_debtor_name"`. During a PACER outage, the value is used as supplied.
+- `joint_case_debtors` (array, optional) — debtor names for additional case numbers, submitted as `[{ "case_number": "...", "debtor_name": "..." }]`. The `case_number` is a display label for the partner's reference — it is not validated against PACER and does not need to appear in `case_numbers`. All entries are stored and echoed back as-is. The debtor names appear on the certificate below the main-case names.
+
+**New response fields (all job endpoints):**
+
+- `joint_debtor_name` — the PACER-resolved joint debtor (or the supplied value when PACER was unavailable). `null` when the case has no joint debtor.
+- `joint_case_debtors` — echoes the array submitted at job creation.
+- `caption_names` — ordered list of all debtor names exactly as they will render in the "IN RE:" section of the certificate (PACER debtor → PACER joint debtor → joint-case names in submission order). `null` for non-bankruptcy jobs; `[]` when no names are present.
+
+**Documented conventions:**
+
+- `case_numbers[0]` is always the main case number. Additional entries (index 1+) are joint or related case numbers submitted for PACER lookup or certificate labeling.
+- `joint_debtor_name` is not included in `missing_case_fields` during a PACER outage — not every case has a joint debtor. Supply it proactively if the case has one.
+- `debtor_name_mismatch` now also covers joint debtor mismatches: `details.field = "joint_debtor_name"` distinguishes a joint mismatch from a primary debtor mismatch.
+
+---
 
 ### 2026-10-22
 
