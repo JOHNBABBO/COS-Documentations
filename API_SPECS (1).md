@@ -1488,6 +1488,11 @@ All errors return a consistent envelope:
 ---
 
 ## Changelog
+### 2026-11-26
+**Partner source attribution in CoS admin**
+- Jobs created through the Partner API are stored with `order_source` set to the partner's configured source name (for example `Verita` or `Irys`). CoS admin now shows that name as the job's **Source**; previously it showed `DIRECT` for API-submitted jobs. Web App jobs still show `DIRECT`.
+- No change to any Partner API request, response, or error. This affects the CoS admin view only.
+---
 
 ### 2026-11-23
 
