@@ -818,10 +818,17 @@ Use `"pacer"` to pull the recipient list from PACER using the submitted court an
     "address": [
       "PO Box 15019",
       "Wilmington, DE 19850"
-    ]
+    ],
+    "accept_unrecognized": false
   }
 ]
 ```
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `name` | string | ✓ | Recipient display name. Max 50 characters. |
+| `address` | array | ✓ | Address label lines (1–5 lines for US, 1–4 for non-US). Each line max 50 characters. Blank lines are stripped. |
+| `accept_unrecognized` | boolean | | Default `false`. When `true` and the address fails recognition (AI pipeline returns `invalid_address`), the address is accepted and mailed as supplied — the API equivalent of the web UI "approve anyway" action. See [Address validation](#address-validation-for-user_supplied-jobs) for full details. |
 
 **Job notifications (`notifications`):** `[CHANGED 2026-07-14]` *New object.*
 
@@ -924,6 +931,33 @@ One-off inline override for this job — takes precedence over `signature_id` an
 
 **Response `201 Created`:** The job is created in `draft` status with an itemized `cost_estimate`. Review it, then confirm with `POST /jobs/mailings/{job_id}/submit`. `[CHANGED 2026-07-14]` The response echoes `debtor_name`, `chapter`, and `judge_name` as stored/resolved by CoS so partners can reconcile them. `[ADDED 2026-11-24]` The response also echoes `joint_debtor_name`, `joint_case_debtors`, and `caption_names`.
 
+For **`user_supplied`** jobs, the response also includes a `recipients` array with `address_status` for each submitted address. All addresses in a successfully created job have `address_status: "approved"` (they either passed validation or were accepted via `accept_unrecognized: true`). `recipients` is omitted for PACER-sourced jobs.
+
+**Example — `user_supplied` job (`cost_estimate` is `null`; `recipients` lists each submitted address):**
+
+```
+{
+  "job_id": "0000000459",
+  "organization_id": "7780303033",
+  "status": "draft",
+  "type": "bankruptcy_notice",
+  "case_number": "20-bk-01701",
+  "debtor_name": "Shalonda Megail Jennings",
+  "chapter": "13",
+  "judge_name": "Katharine M. Samson",
+  "document_count": 1,
+  "recipient_count": 46,
+  "cost_estimate": null,
+  "created_at": "2026-10-09T04:44:53.990Z",
+  "recipients": [
+    { "index": 0, "name": "Bank of America NA", "address_status": "approved" },
+    { "index": 1, "name": "Jane Doe",           "address_status": "approved" }
+  ]
+}
+```
+
+**Example — PACER-sourced job (`cost_estimate` populated; `recipients` field is omitted):**
+
 ```
 {
   "job_id": "0000000459",
@@ -972,6 +1006,186 @@ One-off inline override for this job — takes precedence over `signature_id` an
 
 ---
 
+#### Address validation for `user_supplied` jobs
+
+**`[CHANGED 2026-11-23]`** When `recipients.source = "user_supplied"`, every address is validated at draft creation against the same rules the CoS web UI applies. The job is not created if any address fails; instead, a detailed error lists every failing address so the partner can fix or consent in one round-trip.
+
+**Validation tiers (in order):**
+
+**Tier 1 — Structural (400, not bypassable):** An address with no `name` or no `address` lines is a malformed request. This intentionally differs from the web UI where blank addresses are silently ignored.
+
+**Tier 2 — Format (400, not bypassable):** Hard limits that mirror the web UI's hard stops:
+- `too_many_lines`: More than 5 content lines for US addresses, or more than 4 for non-US addresses
+- `long_lines`: Any address line or the name exceeds 50 characters
+
+**Tier 3 — Recognition (422, bypassable with `accept_unrecognized`):** The CoS AI pipeline determines the address is not a recognizable, deliverable postal address (`invalid_address`). The partner can bypass per-address by setting `accept_unrecognized: true`.
+
+**Error response — 400 (structural or format failures):**
+
+```json
+{
+  "error": {
+    "code": "invalid_request",
+    "message": "2 recipient addresses have format errors.",
+    "job_id": null,
+    "details": {
+      "addresses": [
+        { "index": 0, "name": "Bank of America NA", "reasons": ["too_many_lines"] },
+        { "index": 5, "name": "John Smith",         "reasons": ["long_lines"] }
+      ]
+    }
+  }
+}
+```
+
+**Error response — 400 (mixed: format failures on some addresses + recognition failures on others):**
+
+When hard-stop failures and recognition failures exist on **different** addresses, all are reported together in a single `400` so the partner can fix format errors **and** add `accept_unrecognized: true` in one corrective request rather than discovering the recognition failures on a second attempt. The message notes both counts:
+
+```json
+{
+  "error": {
+    "code": "invalid_request",
+    "message": "2 recipient addresses have format errors; 1 additional address could not be recognized (set accept_unrecognized: true to bypass).",
+    "job_id": null,
+    "details": {
+      "addresses": [
+        { "index": 0, "name": "Bank of America NA", "reasons": ["too_many_lines"] },
+        { "index": 3, "name": "John Smith",         "reasons": ["long_lines"] },
+        { "index": 7, "name": "ABC Lending",        "reasons": ["invalid_address"] }
+      ]
+    }
+  }
+}
+```
+
+> Note: an address that has a format failure (`too_many_lines` or `long_lines`) will only report the format reason — the recognition check is skipped for that specific address since the format issue must be resolved first.
+
+**Error response — 422 (recognition failures only, bypassable):**
+
+```json
+{
+  "error": {
+    "code": "address_unrecognized",
+    "message": "2 recipient addresses could not be recognized. Correct them or set accept_unrecognized to true for each.",
+    "job_id": null,
+    "details": {
+      "addresses": [
+        { "index": 4,  "name": "Jane Doe",    "reasons": ["invalid_address"] },
+        { "index": 17, "name": "ABC Lending", "reasons": ["invalid_address"] }
+      ]
+    }
+  }
+}
+```
+
+Re-sending with `accept_unrecognized: true` on those addresses creates the draft:
+
+```json
+{
+  "addresses": [
+    { "name": "Jane Doe",    "address": ["123 Elm St", "Anytown AZ 00000"], "accept_unrecognized": true },
+    { "name": "ABC Lending", "address": ["PO Box 999"],                     "accept_unrecognized": true }
+  ]
+}
+```
+
+**Reason codes:**
+
+| Code | Tier | Bypassable | Description |
+|---|---|---|---|
+| `empty_name` | 1 | No | `name` is absent or blank |
+| `empty_address` | 1 | No | `address` array is absent or all-blank |
+| `too_many_lines` | 2 | No | > 5 content lines (US) or > 4 (non-US) |
+| `long_lines` | 2 | No | Any line or name exceeds 50 characters |
+| `invalid_address` | 3 | Yes — `accept_unrecognized: true` | AI pipeline does not recognize this as a deliverable postal address |
+
+**PACER jobs are unaffected.** Address validation only applies to `source: "user_supplied"` jobs.
+
+---
+
+#### `GET /jobs/mailings/{job_id}/recipients`
+
+**`[CHANGED 2026-11-27]`** Returns the job's recipients with their address status and the mail pieces sent to each, including USPS tracking numbers for Certified and Priority Express pieces. Works for both `user_supplied` and PACER-sourced jobs.
+
+> This "tracking number" is the USPS piece tracking number (`usps_tracking_number`). It is not the 10-digit job number (`job_id`).
+
+Scoping mirrors all other job endpoints — a job belonging to another partner's org returns `404 not_found`.
+
+**Query parameters:**
+
+| Param          | Type    | Description                                                                                                                                                 |
+| -------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `page`         | integer | Default 1                                                                                                                                                   |
+| `per_page`     | integer | Default 25, max 100                                                                                                                                         |
+| `mail_class`   | string  | `first_class` \| `certified` \| `priority_express`. Returns recipients with at least one piece of that class.                                              |
+| `has_tracking` | boolean | `true`: recipients with an `assigned` piece. `false`: recipients with a piece that is not `assigned`. Combined with `mail_class`, both apply to the same piece. |
+
+An invalid `mail_class` or `has_tracking` value returns `400 invalid_request`. A recipient that matches a filter is returned with all of its pieces.
+
+**Response `200 OK` — after processing:**
+
+```json
+{
+  "job_id": "0000000459",
+  "source": "user_supplied",
+  "recipients": [
+    {
+      "recipient_id": 1042,
+      "index": 0,
+      "name": "Bank of America NA",
+      "address": ["PO Box 15019", "Wilmington, DE 19850"],
+      "address_status": "approved",
+      "pieces": [
+        { "mail_class": "first_class", "usps_tracking_number": null, "tracking_status": "not_applicable" },
+        {
+          "mail_class": "certified",
+          "usps_tracking_number": "9407111899223197428490",
+          "tracking_status": "assigned",
+          "tracking_url": "https://tools.usps.com/go/TrackConfirmAction?tLabels=9407111899223197428490"
+        }
+      ]
+    }
+  ],
+  "pagination": { "page": 1, "per_page": 25, "total": 47 }
+}
+```
+
+**Recipient fields:**
+
+| Field            | Type            | Notes                                                                                                                                                              |
+| ---------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `recipient_id`   | integer \| null | Stable ID for the recipient within the job. `null` until the job is processed.                                                                                    |
+| `index`          | integer \| null | Position in the submitted `recipients.addresses` array. `null` for PACER jobs, or when a processed recipient no longer matches a submitted address by name and address lines. |
+| `name`           | string          |                                                                                                                                                                    |
+| `address`        | array           | Address lines as mailed.                                                                                                                                           |
+| `address_status` | string \| null  | `"approved"` for `user_supplied` recipients (including addresses sent with `accept_unrecognized: true`; the consent is stored internally for audit). `null` for PACER jobs. |
+| `pieces`         | array           | One entry per mail class the recipient is sent. Empty until the job is processed.                                                                                 |
+
+**Piece fields:** `mail_class`, `usps_tracking_number` (`null` unless `assigned`), `tracking_status`, and `tracking_url` (present only when `assigned`).
+
+**`tracking_status` values:**
+
+| Value            | Meaning                                                                                                                                  |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `not_applicable` | First-Class pieces have no USPS tracking number.                                                                                         |
+| `pending`        | Certified or Priority Express piece; the label has not been generated yet.                                                               |
+| `assigned`       | The number is in `usps_tracking_number`.                                                                                                 |
+| `unavailable`    | The Pitney Bowes label request failed. CoS Customer Success handles the piece manually; once a number is entered, the piece changes to `assigned`. |
+
+**When data appears:** pieces and tracking numbers come from label generation during processing.
+
+- **Before processing:** `user_supplied` jobs list the submitted addresses with `recipient_id: null` and `pieces: []`. PACER jobs return `recipients: []`.
+- **After processing:** the list reflects the pieces actually produced, so `total` can differ from the number of submitted addresses.
+
+Use `tracking_ready` on `GET /jobs/mailings/{job_id}` to know when every tracked piece has left `pending`.
+
+**Changes from the 2026-11-23 version of this endpoint:**
+
+- **`[CHANGED 2026-11-27]`** PACER-sourced jobs return `recipients: []` (before processing) or the processed list, instead of `recipients: null`.
+- **`[CHANGED 2026-11-27]`** Added `pagination`, and `recipient_id`, `address`, and `pieces` on each recipient.
+
+---
 #### `POST /jobs/mailings/{job_id}/submit`
 
 Confirm a `draft` job and release it for printing. The job is mailed exactly as estimated — no re-pricing and no second PACER lookup. The onboarding gate is enforced here (not at draft creation): returns `402 payment_required` or `403 terms_not_accepted` if the org isn't cleared, `409 conflict` if the job is not in `draft` status, or `422 validation_error` if the draft has expired.
@@ -1019,6 +1233,7 @@ Example below shows an in-progress (`printing`) job. The response carries **both
   ],
   "recipient_count": 46,
   "certificate_ready": false,
+  "tracking_ready": true,
   "cost_estimate": {
     "document_processing": 5.95,
     "usps_postage": 27.3,
@@ -1059,6 +1274,7 @@ Once the job reaches `completed` (verified live), `cost` is populated, `certific
   ],
   "recipient_count": 46,
   "certificate_ready": true,
+  "tracking_ready": true,
   "cost_estimate": { "...": "same breakdown as above" },
   "cost": {
     "document_processing": 5.95,
@@ -1080,6 +1296,7 @@ Once the job reaches `completed` (verified live), `cost` is populated, `certific
 > - The response includes **both** `cost_estimate` and `cost`. `cost_estimate` is populated from the `draft` onward; `cost` stays `null` until the job reaches `completed`, at which point it holds the final actuals (same breakdown shape as `cost_estimate` — in the verified example above the actuals matched the estimate exactly).
 > - `joint_debtor_name` is `null` when the case has no joint debtor. `joint_case_debtors` is `[]` when none were submitted. `caption_names` is `null` for non-bankruptcy jobs. `[ADDED 2026-11-24]`
 > - `certificate_ready` is `false` until the job completes; `mailed_at` is `null` until envelopes are mailed.
+> - **`[CHANGED 2026-11-27]`** `tracking_ready` is `true` once the job is processed and every Certified / Priority Express piece is `assigned` or `unavailable`. It is `false` before processing. Poll it like `certificate_ready`; per-piece numbers are on `GET /jobs/mailings/{job_id}/recipients`.
 > - `external_reference` is present only when you supplied one on the draft.
 > - For PACER-sourced jobs the PACER lookup runs at **draft creation**, so `recipient_count` and the estimate are known from the `draft` onward.
 
@@ -1124,7 +1341,8 @@ List mailing jobs for an organization.
   "mailings": [
     /* array of job objects (same shape as GET /jobs/mailings/{id}) —
        includes debtor_name, chapter, judge_name [CHANGED 2026-07-14];
-       joint_debtor_name, joint_case_debtors, caption_names [ADDED 2026-11-24] */
+       joint_debtor_name, joint_case_debtors, caption_names [ADDED 2026-11-24];
+       tracking_ready [CHANGED 2026-11-27] */
   ],
   "pagination": {
     "page": 1,
@@ -1242,7 +1460,9 @@ All errors return a consistent envelope:
 | 422  | `case_not_found`     | `[CHANGED 2026-07-14]` No case found for the supplied case number / court location                                                                                                            |
 | 422  | `case_ambiguous`     | `[CHANGED 2026-07-14]` Multiple possible cases matched — supply `court_location.division` and/or `debtor_name` to disambiguate                                                                |
 | 422  | `debtor_name_mismatch` | `[CHANGED 2026-07-14]` Supplied `debtor_name` did not match the PACER-resolved case (see example below). `[ADDED 2026-11-24]` Also returned when a supplied `joint_debtor_name` mismatches the PACER-resolved joint debtor — in that case `details.field = "joint_debtor_name"` distinguishes it from a primary debtor mismatch. |
+| 422  | `address_unrecognized` | **`[CHANGED 2026-11-23]`** One or more `user_supplied` recipient addresses failed the CoS AI validation pipeline and no per-address `accept_unrecognized` consent was provided. The `details.addresses` array lists every failing address with `index`, `name`, and `reasons`. Re-send with `accept_unrecognized: true` on those addresses to bypass. See [Address validation](#address-validation-for-user_supplied-jobs). |
 | 429  | `rate_limited`       | Too many requests — see `Retry-After` header                                                                                                                                                  |
+| 503  | `service_unavailable` | **`[CHANGED 2026-11-23]`** Address validation pipeline (libpostal / Bedrock AI) is temporarily unavailable. Retry the request. Only returned for `user_supplied` draft creation. |
 | 504  | `case_details_required` | PACER is unavailable and one or more case detail fields were not supplied inline (`source = "user_supplied"` jobs only). Provide `bankruptcy_options.debtor_name`, `.chapter`, and `.judge_name`. `details.missing_case_fields` lists the specific absent fields. |
 | 504  | `pacer_fallback_required` | PACER is unavailable and the job used `source = "pacer"`. The entire sourcing strategy must change: re-submit with `recipients.source = "user_supplied"`, a `recipients.addresses` array, and all three case detail fields. `details.missing_fields` lists everything not yet present in the request — `recipients.source`, `recipients.addresses` are always listed; case detail fields appear only when absent. |
 | 500  | `internal_error`     | CoS-side error                                                                                                                                                                                |
@@ -1295,6 +1515,24 @@ All errors return a consistent envelope:
 }
 ```
 
+**Example — `address_unrecognized`:** `[CHANGED 2026-11-23]`
+
+```json
+{
+  "error": {
+    "code": "address_unrecognized",
+    "message": "2 recipient addresses could not be recognized. Correct them or set accept_unrecognized to true for each.",
+    "job_id": null,
+    "details": {
+      "addresses": [
+        { "index": 4,  "name": "Jane Doe",    "reasons": ["invalid_address"] },
+        { "index": 17, "name": "ABC Lending", "reasons": ["invalid_address"] }
+      ]
+    }
+  }
+}
+```
+
 **Example — `case_details_required`** (`source = "user_supplied"` jobs):
 
 ```
@@ -1341,6 +1579,19 @@ All errors return a consistent envelope:
 ---
 
 ## Changelog
+### 2026-11-27
+**USPS tracking numbers per mail piece**
+- `GET /jobs/mailings/{job_id}/recipients` now returns each recipient's mail pieces (`mail_class`, `usps_tracking_number`, `tracking_status`, `tracking_url`) alongside `address_status`, for both `user_supplied` and PACER jobs.
+- `tracking_status`: `not_applicable` (First-Class), `pending` (label not yet generated), `assigned`, `unavailable` (Pitney Bowes failure; changes to `assigned` once CoS enters the number manually).
+- Added `page` / `per_page` (max 100) and the `mail_class` and `has_tracking` filters. Invalid filter values return `400 invalid_request`.
+- Each recipient now also has `recipient_id` and `address`. PACER jobs return `recipients: []` instead of `null`.
+- Added `tracking_ready` to `GET /jobs/mailings/{job_id}` and `GET /jobs/mailings`.
+---
+### 2026-11-26
+**Partner source attribution in CoS admin**
+- Jobs created through the Partner API are stored with `order_source` set to the partner's configured source name (for example `PartnerA` or `PartnerB`). CoS admin now shows that name as the job's **Source**; previously it showed `DIRECT` for API-submitted jobs. Web App jobs still show `DIRECT`.
+- No change to any Partner API request, response, or error. This affects the CoS admin view only.
+---
 
 ### 2026-11-24
 
@@ -1364,6 +1615,23 @@ Added three new optional fields to `bankruptcy_options` and three new fields to 
 - `case_numbers[0]` is always the main case number. Additional entries (index 1+) are joint or related case numbers submitted for PACER lookup or certificate labeling.
 - `joint_debtor_name` is not included in `missing_case_fields` during a PACER outage — not every case has a joint debtor. Supply it proactively if the case has one.
 - `debtor_name_mismatch` now also covers joint debtor mismatches: `details.field = "joint_debtor_name"` distinguishes a joint mismatch from a primary debtor mismatch.
+
+---
+
+### 2026-11-23
+
+**Partner API address validation for `user_supplied` recipients**
+
+- Added three-tier address validation for all `POST /jobs/mailings` requests with `recipients.source = "user_supplied"`. Previously, user-supplied addresses were accepted without any validation; now they go through the same validation rules the CoS web UI enforces.
+- **Tier 1 (400)** — Structurally empty addresses (missing or blank `name`, missing or empty `address` lines) return `400 invalid_request` with a `details.addresses` array listing every failing address by index and reason code (`empty_name`, `empty_address`).
+- **Tier 2 (400)** — Format violations return `400 invalid_request` with reason codes `too_many_lines` (> 5 US lines / > 4 non-US lines) and `long_lines` (any line or name > 50 chars). These are hard stops, consistent with the web UI's hard-stop behavior.
+- **Tier 3 (422, bypassable)** — Addresses the AI pipeline does not recognize as real postal addresses (`invalid_address`) return `422 address_unrecognized`. Partners can bypass per-address by setting `accept_unrecognized: true` on the recipient object.
+- Added `accept_unrecognized` boolean field to the recipient object in `recipients.addresses[]`. Default `false`. Bypasses Tier 3 only.
+- `POST /jobs/mailings` 201 response now includes a `recipients` array for `user_supplied` jobs with `address_status: "approved"` per recipient. `recipients` is omitted for PACER-sourced jobs.
+- Added `GET /jobs/mailings/{job_id}/recipients` endpoint returning the per-recipient list with `address_status`. PACER-sourced jobs return `source: "pacer"`, `recipients: null`.
+- Added error code `address_unrecognized` (422) and `service_unavailable` (503, returned when the validation pipeline is temporarily unreachable).
+- When both hard-stop failures (structural/format) and recognition failures exist on different addresses in the same request, all failures are reported together in a single `400 invalid_request` response so the partner can fix and consent in one corrective request.
+- PACER-sourced jobs are unaffected by all changes above.
 
 ---
 
