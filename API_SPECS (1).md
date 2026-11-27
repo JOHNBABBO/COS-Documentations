@@ -1087,38 +1087,86 @@ Re-sending with `accept_unrecognized: true` on those addresses creates the draft
 
 #### `GET /jobs/mailings/{job_id}/recipients`
 
-**`[CHANGED 2026-11-23]`** Returns the per-recipient address status list for a job. Only populated for `user_supplied` jobs; PACER-sourced jobs return `source: "pacer"` with `recipients: null`.
+**`[CHANGED 2026-11-27]`** Returns the job's recipients with their address status and the mail pieces sent to each, including USPS tracking numbers for Certified and Priority Express pieces. Works for both `user_supplied` and PACER-sourced jobs.
+
+> This "tracking number" is the USPS piece tracking number (`usps_tracking_number`). It is not the 10-digit job number (`job_id`).
 
 Scoping mirrors all other job endpoints — a job belonging to another partner's org returns `404 not_found`.
 
-**Response `200 OK` — `user_supplied` job:**
+**Query parameters:**
+
+| Param          | Type    | Description                                                                                                                                                 |
+| -------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `page`         | integer | Default 1                                                                                                                                                   |
+| `per_page`     | integer | Default 25, max 100                                                                                                                                         |
+| `mail_class`   | string  | `first_class` \| `certified` \| `priority_express`. Returns recipients with at least one piece of that class.                                              |
+| `has_tracking` | boolean | `true`: recipients with an `assigned` piece. `false`: recipients with a piece that is not `assigned`. Combined with `mail_class`, both apply to the same piece. |
+
+An invalid `mail_class` or `has_tracking` value returns `400 invalid_request`. A recipient that matches a filter is returned with all of its pieces.
+
+**Response `200 OK` — after processing:**
 
 ```json
 {
   "job_id": "0000000459",
   "source": "user_supplied",
   "recipients": [
-    { "index": 0, "name": "Bank of America NA", "address_status": "approved" },
-    { "index": 1, "name": "Jane Doe",           "address_status": "approved" },
-    { "index": 2, "name": "ABC Lending",        "address_status": "approved" }
-  ]
+    {
+      "recipient_id": 1042,
+      "index": 0,
+      "name": "Bank of America NA",
+      "address": ["PO Box 15019", "Wilmington, DE 19850"],
+      "address_status": "approved",
+      "pieces": [
+        { "mail_class": "first_class", "usps_tracking_number": null, "tracking_status": "not_applicable" },
+        {
+          "mail_class": "certified",
+          "usps_tracking_number": "9407111899223197428490",
+          "tracking_status": "assigned",
+          "tracking_url": "https://tools.usps.com/go/TrackConfirmAction?tLabels=9407111899223197428490"
+        }
+      ]
+    }
+  ],
+  "pagination": { "page": 1, "per_page": 25, "total": 47 }
 }
 ```
 
-`address_status` is always `"approved"` for recipients in a created job. Addresses that were consented with `accept_unrecognized: true` also show `"approved"` — the consent is stored internally for audit purposes.
+**Recipient fields:**
 
-**Response `200 OK` — PACER-sourced job:**
+| Field            | Type            | Notes                                                                                                                                                              |
+| ---------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `recipient_id`   | integer \| null | Stable ID for the recipient within the job. `null` until the job is processed.                                                                                    |
+| `index`          | integer \| null | Position in the submitted `recipients.addresses` array. `null` for PACER jobs, or when a processed recipient no longer matches a submitted address by name and address lines. |
+| `name`           | string          |                                                                                                                                                                    |
+| `address`        | array           | Address lines as mailed.                                                                                                                                           |
+| `address_status` | string \| null  | `"approved"` for `user_supplied` recipients (including addresses sent with `accept_unrecognized: true`; the consent is stored internally for audit). `null` for PACER jobs. |
+| `pieces`         | array           | One entry per mail class the recipient is sent. Empty until the job is processed.                                                                                 |
 
-```json
-{
-  "job_id": "0000000460",
-  "source": "pacer",
-  "recipients": null
-}
-```
+**Piece fields:** `mail_class`, `usps_tracking_number` (`null` unless `assigned`), `tracking_status`, and `tracking_url` (present only when `assigned`).
+
+**`tracking_status` values:**
+
+| Value            | Meaning                                                                                                                                  |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `not_applicable` | First-Class pieces have no USPS tracking number.                                                                                         |
+| `pending`        | Certified or Priority Express piece; the label has not been generated yet.                                                               |
+| `assigned`       | The number is in `usps_tracking_number`.                                                                                                 |
+| `unavailable`    | The Pitney Bowes label request failed. CoS Customer Success handles the piece manually; once a number is entered, the piece changes to `assigned`. |
+
+**When data appears:** pieces and tracking numbers come from label generation during processing.
+
+- **Before processing:** `user_supplied` jobs list the submitted addresses with `recipient_id: null` and `pieces: []`. PACER jobs return `recipients: []`.
+- **After processing:** the list reflects the pieces actually produced, so `total` can differ from the number of submitted addresses.
+
+Use `tracking_ready` on `GET /jobs/mailings/{job_id}` to know when every tracked piece has left `pending`.
+
+**Changes from the 2026-11-23 version of this endpoint:**
+
+- **`[CHANGED 2026-11-27]`** PACER-sourced jobs return `recipients: []` (before processing) or the processed list, instead of `recipients: null`.
+- **`[CHANGED 2026-11-27]`** Added `pagination`, and `recipient_id`, `address`, and `pieces` on each recipient.
 
 ---
-
 #### `POST /jobs/mailings/{job_id}/submit`
 
 Confirm a `draft` job and release it for printing. The job is mailed exactly as estimated — no re-pricing and no second PACER lookup. The onboarding gate is enforced here (not at draft creation): returns `402 payment_required` or `403 terms_not_accepted` if the org isn't cleared, `409 conflict` if the job is not in `draft` status, or `422 validation_error` if the draft has expired.
@@ -1157,6 +1205,7 @@ Example below shows an in-progress (`printing`) job. The response carries **both
   "judge_name": "Katharine M. Samson",
   "recipient_count": 46,
   "certificate_ready": false,
+  "tracking_ready": true,
   "cost_estimate": {
     "document_processing": 5.95,
     "usps_postage": 27.3,
@@ -1188,6 +1237,7 @@ Once the job reaches `completed` (verified live), `cost` is populated, `certific
   "judge_name": "Katharine M. Samson",
   "recipient_count": 46,
   "certificate_ready": true,
+  "tracking_ready": true,
   "cost_estimate": { "...": "same breakdown as above" },
   "cost": {
     "document_processing": 5.95,
@@ -1208,6 +1258,7 @@ Once the job reaches `completed` (verified live), `cost` is populated, `certific
 > **Notes:**
 > - The response includes **both** `cost_estimate` and `cost`. `cost_estimate` is populated from the `draft` onward; `cost` stays `null` until the job reaches `completed`, at which point it holds the final actuals (same breakdown shape as `cost_estimate` — in the verified example above the actuals matched the estimate exactly).
 > - `certificate_ready` is `false` until the job completes; `mailed_at` is `null` until envelopes are mailed.
+> - **`[CHANGED 2026-11-27]`** `tracking_ready` is `true` once the job is processed and every Certified / Priority Express piece is `assigned` or `unavailable`. It is `false` before processing. Poll it like `certificate_ready`; per-piece numbers are on `GET /jobs/mailings/{job_id}/recipients`.
 > - `external_reference` is present only when you supplied one on the draft.
 > - For PACER-sourced jobs the PACER lookup runs at **draft creation**, so `recipient_count` and the estimate are known from the `draft` onward.
 
@@ -1251,7 +1302,8 @@ List mailing jobs for an organization.
 {
   "mailings": [
     /* array of job objects (same shape as GET /jobs/mailings/{id}) —
-       includes debtor_name, chapter, judge_name [CHANGED 2026-07-14] */
+       includes debtor_name, chapter, judge_name [CHANGED 2026-07-14]
+       and tracking_ready [CHANGED 2026-11-27] */
   ],
   "pagination": {
     "page": 1,
@@ -1488,6 +1540,14 @@ All errors return a consistent envelope:
 ---
 
 ## Changelog
+### 2026-11-27
+**USPS tracking numbers per mail piece**
+- `GET /jobs/mailings/{job_id}/recipients` now returns each recipient's mail pieces (`mail_class`, `usps_tracking_number`, `tracking_status`, `tracking_url`) alongside `address_status`, for both `user_supplied` and PACER jobs.
+- `tracking_status`: `not_applicable` (First-Class), `pending` (label not yet generated), `assigned`, `unavailable` (Pitney Bowes failure; changes to `assigned` once CoS enters the number manually).
+- Added `page` / `per_page` (max 100) and the `mail_class` and `has_tracking` filters. Invalid filter values return `400 invalid_request`.
+- Each recipient now also has `recipient_id` and `address`. PACER jobs return `recipients: []` instead of `null`.
+- Added `tracking_ready` to `GET /jobs/mailings/{job_id}` and `GET /jobs/mailings`.
+---
 ### 2026-11-26
 **Partner source attribution in CoS admin**
 - Jobs created through the Partner API are stored with `order_source` set to the partner's configured source name (for example `Verita` or `Irys`). CoS admin now shows that name as the job's **Source**; previously it showed `DIRECT` for API-submitted jobs. Web App jobs still show `DIRECT`.
